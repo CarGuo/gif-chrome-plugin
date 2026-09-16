@@ -101,6 +101,8 @@ npm run test:drop-frames
 
 加载构建生成的 `dist/`。本地开发、构建和使用扩展均**不需要 `.env` 或 GitHub token**。
 
+[CI and Release](https://github.com/CarGuo/gif-chrome-plugin/actions/workflows/ci.yml) 在 PR 和 `main` 提交时运行类型检查、单元/浏览器测试及打包校验。推送与项目版本一致的 `vX.Y.Z` tag 后，自动发布扩展 ZIP、第三方源码 ZIP 和 SHA-256；`0.x` 标记为预览版。操作步骤见 [发布指南](docs/RELEASING.md)。
+
 ## 文档
 
 | 文档 | 内容 |

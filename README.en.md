@@ -78,6 +78,8 @@ npm run test:drop-frames
 
 Load `dist/` in Chrome after building. Node.js 20.18+ is required. No `.env` or GitHub token is needed to build or use the extension.
 
+[CI and Release](https://github.com/CarGuo/gif-chrome-plugin/actions/workflows/ci.yml) runs type checks, unit/browser tests and package verification for PRs and `main`. Pushing a `vX.Y.Z` tag that matches the project version automatically publishes the extension ZIP, third-party source ZIP and SHA-256 checksums. Versions below 1.0 are marked as pre-releases; see the [release guide](docs/RELEASING.md).
+
 Further documentation: [User guide](docs/USER_GUIDE.md) · [Development](docs/DEVELOPMENT.md) · [Releasing](docs/RELEASING.md) (Chinese).
 
 Licensed under [GPL-2.0-or-later](LICENSE). See [third-party notices and source distribution](THIRD_PARTY_NOTICES.md). Inspired by the [Gif Toolkit desktop project](https://github.com/CarGuo/gif-toolkit); powered by [FFmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm) and [gifuct-js](https://github.com/matt-way/gifuct-js).

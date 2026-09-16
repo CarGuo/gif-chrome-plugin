@@ -6,7 +6,7 @@
 
 当前 v0.1.x 是开发者模式安装的预览版。GitHub Release 不等同于 Chrome Web Store 上架，也不表示所有视频平台均已验收。保留 README 的验证矩阵，不能将结构模拟测试描述为真实登录态测试。
 
-开发者日常构建不需要凭据。维护者推送使用已有 SSH 配置；创建 Release / 修改仓库资料可使用 GitHub CLI 的登录授权。私有仓库的经典 token 需要 `repo` 权限；细粒度 token 需目标仓库访问权，以及相应 Contents / Metadata / Administration 写权限。不要把凭据写入代码、命令参数、Git 远程 URL 或发布附件。
+开发者日常构建不需要凭据。维护者推送使用已有 SSH 配置；自动发布使用 GitHub Actions 自带的 `GITHUB_TOKEN`，无需添加个人 token、Secrets 或上传 `.env`。工作流仅在发布作业声明 `contents: write`，其余检查作业只有读取权限。仓库或组织策略需要允许 Actions、工作流引用的官方 Actions 及该写权限。不要把凭据写入代码、命令参数、Git 远程 URL 或发布附件。
 
 ## 1. 准备版本
 
@@ -54,7 +54,43 @@ npm run release:verify
 
 提交源码、文档、锁文件和许可证，不提交 `node_modules/`、`dist/`、`artifacts/`、`test-results/` 或 `.env*`。使用普通推送；发现远程新提交时先同步处理，不强制覆盖。
 
-为已验证提交创建带注释标签，例如 `v0.1.5`。创建 GitHub **draft release**，以 `docs/releases/v0.1.5.md` 作为正文，上传三个附件。验证名称、文件大小、标签指向的提交和资产摘要后再公开该 Release。v0.1.5 标记为 **pre-release**，仓库本身可见性保持不变。
+### 推送 tag 自动发布
+
+[CI and Release](../.github/workflows/ci.yml) 会在推送 `v*` tag 时自动执行完整测试、打包与发布。版本必须是 `major.minor.patch` 三段数字，tag 必须严格等于 `v` + `package.json.version`，并与 `package-lock.json` 两处版本一致；不一致立即失败。`0.x` 自动标记 **pre-release**，`1.0.0` 起为正式 Release。Chrome 清单不接受 `-beta` 一类后缀，因此预览状态通过 Release 属性表示。
+
+以下以**未来的 0.1.6** 为例；发布前须先完成该版本的实际变更、文档和验收，不要仅为触发 CI 空升版本：
+
+```sh
+npm version 0.1.6 --no-git-tag-version
+# 更新 CHANGELOG、版本文档及 docs/releases/v0.1.6.md，检查后提交。
+git add package.json package-lock.json CHANGELOG.md README.md README.en.md docs third_party/SOURCES.md
+git commit -m "Release Gif Toolkit Chrome v0.1.6"
+git tag -a v0.1.6 -m "Gif Toolkit Chrome v0.1.6"
+git push origin main
+git push origin v0.1.6
+```
+
+tag 必须指向包含该工作流的提交。之前已经推送的 `v0.1.5` 不会因新增 CI 被追溯发布；不移动旧 tag、不覆盖旧发行包。本次 CI 配置本身不改变扩展版本。
+
+打开仓库 [Actions](https://github.com/CarGuo/gif-chrome-plugin/actions/workflows/ci.yml) 查看进度。顺序为：
+
+1. 校验版本，安装锁定依赖，运行类型检查、单元测试、生产构建及五组浏览器测试。
+2. 生成扩展 ZIP、固定来源的第三方源码 ZIP、`SHA256SUMS.txt`，运行 `release:verify`。
+3. 只把三个校验过的附件交给独立发布作业，再核对一次 SHA-256。
+4. 创建该 tag 的草稿 Release，优先使用 `docs/releases/<tag>.md`；没有该文件时使用 GitHub 自动生成的发布说明。
+5. 上传三个附件，再从 GitHub 下载回读，对比校验文件并核对两份 ZIP 的 SHA-256。全部通过后才自动发布草稿。
+
+PR / `main` 提交会执行相同的验证和打包，但不会发布。Actions 的 **Run workflow** 仅用于手动检查，即使选中 tag 也不会发布；自动发布只由 tag 的 push 事件触发。浏览器测试使用隔离的本地素材，不能替代真实平台登录态验收。
+
+### 失败与重跑
+
+- 检查、测试、源码下载或摘要校验失败：不发布 Release。在 Actions 查看失败步骤；失败时已有的测试 JSON / PNG 作为诊断附件保留 7 天。
+- 网络等临时错误解决后，对原 tag 的工作流点击 **Re-run all jobs**；若仅发布步骤失败且发行附件未过期，可使用 **Re-run failed jobs**。
+- 上传中断会留下草稿，重跑继续上传并校验。已经公开的同 tag Release 会直接跳过，保持既有附件不变。
+- tag 版本错误或代码错误：在新提交修正并使用新版本 tag，不强制移动已发布标签。发行作业的中间附件保留 7 天，过期后需重新运行全部作业。
+- 若 GitHub 策略阻止 Actions 或写权限，先在仓库 / 组织设置解决限制；个人 `.env` 无法替代工作流权限。
+
+需要手动发布已有旧 tag 时，仍可在 GitHub 创建草稿，粘贴对应的版本说明、上传本地生成并校验的三个附件，然后发布。0.x 记得选择 **pre-release**。仓库本身可见性保持不变。
 
 发布完成后再次查询远程标签、Release 状态、附件下载地址和仓库 About，确认都对应同一次提交。GitHub 自动生成的 Source code 是项目源码，不是可直接加载的扩展包；说明下载哪个 ZIP。
 

@@ -1,0 +1,163 @@
+name: CI and Release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# v0.1.5 CI: serialize each ref so reruns cannot upload competing release assets.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check, test and package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Validate version and tag
+        id: version
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          assert.match(pkg.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, 'Use a numeric major.minor.patch Chrome extension version.');
+          const parts = pkg.version.split('.').map(Number);
+          assert(parts.every(part => part <= 65535) && parts.some(Boolean), 'Version must fit the Chrome manifest version format.');
+          assert.equal(lock.version, pkg.version, 'package-lock.json version is stale.');
+          assert.equal(lock.packages[''].version, pkg.version, 'package-lock.json root version is stale.');
+          if (process.env.GITHUB_REF_TYPE === 'tag') {
+            assert.equal(process.env.GITHUB_REF_NAME, `v${pkg.version}`, 'Tag must exactly match package.json.');
+          }
+          // v0.1.5 CI: keep the existing 0.x preview policy without invalid manifest suffixes.
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\nprerelease=${parts[0] === 0}\n`);
+          NODE
+      - run: npm ci
+      - name: Typecheck, unit tests and production build
+        run: npm run check
+      - name: Install the locked Playwright Chromium and OS dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Media and queue end-to-end tests
+        run: npm run test:e2e
+      # The download test consumes the real GIF produced by test:e2e.
+      - name: Browser download and filename tests
+        run: npm run test:download
+      - name: Frame removal and duration tests
+        run: npm run test:drop-frames
+      - name: Preferences, migration and history tests
+        run: npm run test:preferences
+      - name: Video context menu tests
+        run: npm run test:context-menu
+      - name: Package extension
+        run: npm run package
+      - name: Package pinned third-party sources
+        run: npm run package:sources
+      - name: Verify release files and write SHA256SUMS
+        run: npm run release:verify
+      - name: Keep verified release files
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: |
+            artifacts/gif-toolkit-chrome-${{ steps.version.outputs.version }}.zip
+            artifacts/gif-toolkit-chrome-${{ steps.version.outputs.version }}-third-party-sources.zip
+            artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Keep test diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-diagnostics
+          path: |
+            test-results/**/*.json
+            test-results/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: check
+    # v0.1.5 CI: only tag pushes publish; PRs and manual CI runs remain read-only.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: artifacts
+      - name: Verify transferred assets
+        working-directory: artifacts
+        run: sha256sum --check --strict SHA256SUMS.txt
+      - name: Upload, verify and publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.check.outputs.version }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          # Fail on API errors instead of treating permission/network failures as a missing release.
+          gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          draft=$(jq -r --arg tag "$RELEASE_TAG" '.[][] | select(.tag_name == $tag) | .draft' "$RUNNER_TEMP/releases.json")
+          if [[ "$draft" == 'false' ]]; then
+            echo "Release $RELEASE_TAG is already published; keeping its assets unchanged."
+            exit 0
+          fi
+
+          notes="docs/releases/$RELEASE_TAG.md"
+          if [[ -z "$draft" ]]; then
+            notes_args=(--generate-notes)
+            if [[ -f "$notes" ]]; then notes_args=(--notes-file "$notes"); fi
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "Gif Toolkit Chrome $RELEASE_TAG" \
+              --prerelease="$PRERELEASE" "${notes_args[@]}"
+          elif [[ -f "$notes" ]]; then
+            gh release edit "$RELEASE_TAG" --notes-file "$notes"
+          fi
+
+          # v0.1.5 CI: upload only to a draft; interrupted uploads can safely rerun.
+          gh release upload "$RELEASE_TAG" \
+            "artifacts/gif-toolkit-chrome-$RELEASE_VERSION.zip" \
+            "artifacts/gif-toolkit-chrome-$RELEASE_VERSION-third-party-sources.zip" \
+            artifacts/SHA256SUMS.txt --clobber
+
+          # Verify the actual remote bytes before making the release visible.
+          verify_dir=$(mktemp -d)
+          gh release download "$RELEASE_TAG" --dir "$verify_dir" \
+            --pattern "gif-toolkit-chrome-$RELEASE_VERSION.zip" \
+            --pattern "gif-toolkit-chrome-$RELEASE_VERSION-third-party-sources.zip" \
+            --pattern SHA256SUMS.txt
+          cmp artifacts/SHA256SUMS.txt "$verify_dir/SHA256SUMS.txt"
+          (cd "$verify_dir" && sha256sum --check --strict SHA256SUMS.txt)
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$PRERELEASE"
+          gh release view "$RELEASE_TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
