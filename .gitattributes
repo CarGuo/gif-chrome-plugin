@@ -1,0 +1,15 @@
+* text=auto eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.png binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.wasm binary
+# Preserve upstream legal texts byte-for-byte, including their original whitespace.
+third_party/licenses/** -text -whitespace

@@ -1,0 +1,48 @@
+{
+  "name": "gif-toolkit-chrome",
+  "version": "0.1.5",
+  "private": true,
+  "type": "module",
+  "description": "Turn selected webpage video and animated images into size-limited GIFs, locally.",
+  "license": "GPL-2.0-or-later",
+  "repository": { "type": "git", "url": "git+ssh://git@github.com/CarGuo/gif-chrome-plugin.git" },
+  "homepage": "https://github.com/CarGuo/gif-chrome-plugin#readme",
+  "bugs": { "url": "https://github.com/CarGuo/gif-chrome-plugin/issues" },
+  "engines": {
+    "node": ">=20.18"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "node scripts/e2e.mjs",
+    "test:download": "node scripts/download-smoke.mjs",
+    "test:context-menu": "node scripts/context-menu.mjs",
+    "test:preferences": "node scripts/preferences.mjs",
+    "test:drop-frames": "node scripts/drop-frames.mjs",
+    "test:platform": "node scripts/platform-smoke.mjs",
+    "package": "node scripts/package.mjs",
+    "package:sources": "node scripts/package-sources.mjs",
+    "release:verify": "node scripts/verify-release.mjs",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@ffmpeg/core": "0.12.10",
+    "@ffmpeg/ffmpeg": "0.12.15",
+    "gifuct-js": "2.1.2",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.326",
+    "@types/node": "22.15.30",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "@vitejs/plugin-react": "4.7.0",
+    "fflate": "0.8.2",
+    "playwright": "1.60.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.3",
+    "vitest": "3.2.4"
+  }
+}
