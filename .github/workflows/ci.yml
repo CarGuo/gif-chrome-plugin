@@ -56,6 +56,8 @@ jobs:
         run: npm run check
       - name: Install the locked Playwright Chromium and OS dependencies
         run: npx playwright install --with-deps chromium
+      - name: HLS, DASH and blob download tests
+        run: npm run test:transports
       - name: Media and queue end-to-end tests
         run: npm run test:e2e
       # The download test consumes the real GIF produced by test:e2e.
@@ -65,6 +67,8 @@ jobs:
         run: npm run test:drop-frames
       - name: Preferences, migration and history tests
         run: npm run test:preferences
+      - name: History, cache cleanup and persistence tests
+        run: npm run test:history
       - name: Video context menu tests
         run: npm run test:context-menu
       - name: Package extension

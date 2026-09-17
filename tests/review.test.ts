@@ -42,6 +42,11 @@ describe('animation source metadata and clip preservation', () => {
     expect(initializeClips([{ id: 'pending', start: 0, end: 0 }], inspected)[0]).toMatchObject({ start: 0, end: 2.4 });
     expect(initializeClips([], inspected)).toEqual([]);
   });
+  it('refreshes the preview end of an end-of-source selection without moving a fixed trim', () => {
+    const full = { id: 'full', start: 0.2, end: 2.48, endMode: 'source' as const };
+    const manual = { id: 'manual', start: 0.2, end: 1.8, endMode: 'time' as const };
+    expect(initializeClips([full, manual], inspected)).toEqual([{ ...full, end: 2.4 }, manual]);
+  });
   it('collects image origins once and excludes video and data URLs', () => {
     expect(imageOrigins([source, { ...source, url: 'https://cdn.test/b.webp' }, { ...source, url: 'https://other.test/c.gif' }, { ...source, kind: 'video' }, { ...source, url: 'data:image/gif;base64,R0lGOD' }])).toEqual(['https://cdn.test/*', 'https://other.test/*']);
   });

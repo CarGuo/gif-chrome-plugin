@@ -1,28 +1,12 @@
 import { parseGIF } from 'gifuct-js';
-import { fitDimensions, POLICY, TaskError, type ExportSettings } from './model';
+import { POLICY, TaskError } from './model';
 import type { FramePlan } from './frame-plan';
 export interface Candidate { width: number; height: number; fps: number; colors: number }
-export function candidates(width: number, height: number, settings: ExportSettings): Candidate[] {
-  const base = fitDimensions(width, height, settings.maxSide);
-  const minimum = Math.min(POLICY.minimumSide, Math.max(base.width, base.height));
-  const result: Candidate[] = [];
-  for (let level = 0; level < POLICY.spatialLevels; level++) {
-    const ratio = POLICY.shrinkRatio ** level;
-    const side = Math.max(minimum, Math.floor(Math.max(base.width, base.height) * ratio));
-    const dims = fitDimensions(base.width, base.height, side);
-    const fps = Math.min(settings.fps, Math.max(POLICY.minimumFps, Math.round(settings.fps * Math.sqrt(ratio))));
-    // v0.1.2: exhaust palette compression at unchanged dimensions/fps before dropping frames/resizing.
-    // At every reduced level, restart from the original sampled frames and optimize its palette again.
-    for (const colors of POLICY.paletteColors) {
-      const candidate = { ...dims, fps, colors };
-      if (!result.some(c => JSON.stringify(c) === JSON.stringify(candidate))) result.push(candidate);
-    }
-  }
-  return result;
-}
 function frameFilter(candidate: Candidate, plan?: FramePlan) {
   const filter = `fps=${candidate.fps}:round=up:eof_action=pass,scale=${candidate.width}:${candidate.height}:flags=lanczos`;
-  return plan ? `${filter},format=rgba,select='${plan.indices.map(index => `eq(n,${index})`).join('+')}'` : filter;
+  // v0.1.6: selection only changes timestamps. Do not force an intermediate pixel format;
+  // let scale negotiate the palette filters' format. RGBA is required only for frame hashes.
+  return plan ? `${filter},select='${plan.indices.map(index => `eq(n,${index})`).join('+')}'` : filter;
 }
 function frameInput(inputFps: number, inputPattern: string) {
   return ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-framerate', String(inputFps), '-i', inputPattern];
@@ -39,11 +23,13 @@ export function buildPaletteArgs(candidate: Candidate, inputFps: number, inputPa
     `${frameFilter(candidate, plan)},palettegen=max_colors=${candidate.colors}:reserve_transparent=1:stats_mode=full`,
     '-frames:v', '1', '-update', '1', '-y', palette];
 }
-export function buildEncodeArgs(candidate: Candidate, inputFps: number, inputPattern: string, output: string, palette = 'palette.png', plan?: FramePlan) {
-  const graph = `[0:v]${frameFilter(candidate, plan)}[frames];[frames][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle`;
+export function buildEncodeArgs(candidate: Candidate, inputFps: number, inputPattern: string, output: string, palette = 'palette.png', plan?: FramePlan, finalDelay = plan?.finalDelay) {
+  // v0.1.6: ordered dithering matches desktop gif-toolkit's video path. A stable spatial
+  // pattern avoids propagating new diffusion noise across frames and improves GIF compression.
+  const graph = `[0:v]${frameFilter(candidate, plan)}[frames];[frames][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`;
   return [...frameInput(inputFps, inputPattern), '-i', palette,
     '-filter_complex_threads', '1', '-filter_complex', graph, '-an', '-gifflags', '+offsetting+transdiff', '-loop', '0',
-    ...(plan ? ['-fps_mode', 'passthrough', '-enc_time_base', '1:100', '-final_delay', String(plan.finalDelay)] : []), '-y', output];
+    ...(finalDelay !== undefined ? ['-fps_mode', 'passthrough', '-enc_time_base', '1:100', '-final_delay', String(finalDelay)] : []), '-y', output];
 }
 export function inspectGif(bytes: Uint8Array, expected: { maxBytes: number; maxSide: number; duration: number; fps: number; frames?: number }) {
   if (bytes.length < 14 || bytes[bytes.length - 1] !== 0x3b) throw new TaskError('invalidOutput');

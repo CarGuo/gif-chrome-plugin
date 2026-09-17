@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { zip } from 'fflate';
 
@@ -24,6 +24,16 @@ for (const source of lock.sources) {
   files[`sources/${source.filename}`] = [bytes, { level: 0 }];
   console.log(`Verified ${source.name}`);
 }
+// v0.1.6: retain the exact MPL-covered TypeScript sources used by the pinned package.
+async function includeTree(directory, prefix) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = `${directory}/${entry.name}`, key = `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) await includeTree(path, key);
+    else files[key] = new Uint8Array(await readFile(path));
+  }
+}
+await includeTree('node_modules/mediabunny/src', 'mediabunny/src');
+for (const name of ['LICENSE', 'package.json']) files[`mediabunny/${name}`] = new Uint8Array(await readFile(`node_modules/mediabunny/${name}`));
 files['SOURCES.md'] = new Uint8Array(await readFile('third_party/SOURCES.md'));
 files['sources.lock.json'] = new Uint8Array(await readFile('third_party/sources.lock.json'));
 files['LICENSE'] = new Uint8Array(await readFile('LICENSE'));

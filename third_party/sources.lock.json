@@ -195,6 +195,36 @@
       "filename": "zlib-cacf7f1d4e3d44d871b605da3b647f07d718623f.tar.gz",
       "sha256": "6d4d6640ca3121620995ee255945161821218752b551a1a180f4215f7d124d45",
       "bytes": 645528
+    },
+    {
+      "name": "gifsicle",
+      "repo": "kohler/gifsicle",
+      "upstreamRef": "v1.92",
+      "revision": "1e2ca7401692ba94d7405de6e9dd1d1e73ca880f",
+      "url": "https://codeload.github.com/kohler/gifsicle/tar.gz/1e2ca7401692ba94d7405de6e9dd1d1e73ca880f",
+      "filename": "gifsicle-1e2ca7401692ba94d7405de6e9dd1d1e73ca880f.tar.gz",
+      "sha256": "1dbea64c3f056f03ef372aa48990d564fe717da14e278d6f22dea02ff1bd30b9",
+      "bytes": 479757
+    },
+    {
+      "name": "gifsicle-wasm-browser",
+      "repo": "renzhezhilu/gifsicle-wasm-browser",
+      "upstreamRef": "1.5.19",
+      "revision": "7033183ee0db22bb339a878571d743b9642e1c77",
+      "url": "https://codeload.github.com/renzhezhilu/gifsicle-wasm-browser/tar.gz/7033183ee0db22bb339a878571d743b9642e1c77",
+      "filename": "gifsicle-wasm-browser-7033183ee0db22bb339a878571d743b9642e1c77.tar.gz",
+      "sha256": "f16071bb8b8b3b4b7fb49105af6186cfb528787deb9bda40e4aae75c637406ec",
+      "bytes": 1497556
+    },
+    {
+      "name": "wasm-codecs",
+      "repo": "cyrilwanner/wasm-codecs",
+      "upstreamRef": "master",
+      "revision": "89fb54b412e262832d61d9da5b4deb02ead184d4",
+      "url": "https://codeload.github.com/cyrilwanner/wasm-codecs/tar.gz/89fb54b412e262832d61d9da5b4deb02ead184d4",
+      "filename": "wasm-codecs-89fb54b412e262832d61d9da5b4deb02ead184d4.tar.gz",
+      "sha256": "9d93f87194f6bacc83d0a2de6ce3945c6bcb7da829340ba4a658f09f709c2206",
+      "bytes": 17504486
     }
   ]
 }

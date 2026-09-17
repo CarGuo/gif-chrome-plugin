@@ -1,16 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { defaultSegment, DEFAULT_SETTINGS, DROP_FRAME_MODES, errorCode, httpOrigin, isTerminal, outputDuration, POLICY, rpc, TaskError, validateOutputName, validateSegment, validateSettings, type DropFrames, type ExportSettings, type Job, type MediaSource, type Segment } from '../shared/model';
+import { defaultSegment, DEFAULT_SETTINGS, DROP_FRAME_MODES, editSegment, errorCode, hasResult, httpOrigin, isTerminal, outputDuration, POLICY, prepareSegment, rpc, TaskError, validateOutputName, validateSettings, type CacheSummary, type DropFrames, type ExportSettings, type Job, type MediaSource, type Segment } from '../shared/model';
 import { makeFilename } from '../shared/filename';
-import { imageOrigins, initializeClips, withImageMetadata } from '../shared/sources';
+import { initializeClips, withImageMetadata } from '../shared/sources';
+import { mediaOrigins } from '../shared/acquisition';
 import { getResult } from '../shared/storage';
-import { errorText, number, stageText, t, time, type TextKey } from './i18n';
+import { dateTime, errorText, number, stageText, t, time, type TextKey } from './i18n';
+import { CleanupDialog, type CleanupRequest } from './cleanup-dialog';
 import './style.css';
 
 const dropFrameLabels: Record<DropFrames, TextKey> = { none: 'dropFramesOff', duplicates: 'dropFramesDuplicates', every2: 'dropFramesEvery2', every3: 'dropFramesEvery3', every4: 'dropFramesEvery4' };
 
 function App() {
   const [sources, setSources] = useState<MediaSource[]>([]);
+  const [missingFrameOrigins, setMissingFrameOrigins] = useState<string[]>([]);
   const [sourceNames, setSourceNames] = useState<Record<string, string>>({});
   const [jobNames, setJobNames] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Record<string, Segment[]>>({});
@@ -20,6 +23,12 @@ function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ url: string; job: Job } | null>(null);
+  const [view, setView] = useState<'create' | 'history'>('create');
+  const [query, setQuery] = useState('');
+  const [historyFilter, setHistoryFilter] = useState('all');
+  const [cache, setCache] = useState<CacheSummary>();
+  const [cleanup, setCleanup] = useState<CleanupRequest | null>(null);
+  const previewRequest = useRef(0);
   const sourceTab = useRef<number | undefined>(undefined);
 
   function acceptSources(next: MediaSource[]) {
@@ -32,16 +41,20 @@ function App() {
     void rpc<ExportSettings>({ target: 'background', type: 'load-preferences' }).then(values => {
       setSettings(values); setSettingsReady(true);
     }).catch(error => setNotice(errorText(errorCode(error))));
-    void chrome.storage.session.get(['sources', 'activeTabId']).then(data => { sourceTab.current = data.activeTabId; acceptSources(data.sources ?? []); });
+    void chrome.storage.session.get(['sources', 'activeTabId', 'missingFrameOrigins']).then(data => { sourceTab.current = data.activeTabId; setMissingFrameOrigins(data.missingFrameOrigins ?? []); acceptSources(data.sources ?? []); });
     void refreshJobs().catch(error => setNotice(errorText(errorCode(error))));
     const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === 'session' && changes.activeTabId) sourceTab.current = changes.activeTabId.newValue;
+      if (area === 'session' && changes.missingFrameOrigins) setMissingFrameOrigins(changes.missingFrameOrigins.newValue ?? []);
       if (area === 'session' && changes.sources) acceptSources(changes.sources.newValue ?? []);
       if (area === 'session' && changes.scanError?.newValue) setNotice(errorText(changes.scanError.newValue));
     };
-    const onMessage = (message: { type: 'job-updated'; job: Job } | { type: 'jobs-removed'; ids: string[] }) => {
+    const onMessage = (message: { type: 'job-updated'; job: Job } | { type: 'jobs-removed' | 'cache-cleared'; ids: string[] }) => {
       if (message.type === 'job-updated') setJobs(previous => [message.job, ...previous.filter(j => j.id !== message.job.id)].sort((a, b) => b.createdAt - a.createdAt));
-      if (message.type === 'jobs-removed') {
-        setJobs(previous => previous.filter(job => !message.ids.includes(job.id)));
+      if (message.type === 'jobs-removed' || message.type === 'cache-cleared') {
+        previewRequest.current++;
+        if (message.type === 'jobs-removed') setJobs(previous => previous.filter(job => !message.ids.includes(job.id)));
+        else void refreshJobs().catch(error => setNotice(errorText(errorCode(error))));
         setPreview(previous => previous && message.ids.includes(previous.job.id) ? null : previous);
       }
     };
@@ -49,20 +62,29 @@ function App() {
     return () => { chrome.storage.onChanged.removeListener(onStorage); chrome.runtime.onMessage.removeListener(onMessage); };
   }, []);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url); }, [preview]);
+  const history = jobs.filter(job => isTerminal(job.stage));
+  const historyRevision = history.map(job => `${job.id}:${job.updatedAt}`).join(',');
+  useEffect(() => {
+    if (view !== 'history') return;
+    let mounted = true;
+    void rpc<CacheSummary>({ target: 'background', type: 'cache-summary' }).then(value => { if (mounted) setCache(value); })
+      .catch(error => { if (mounted) setNotice(errorText(errorCode(error))); });
+    return () => { mounted = false; };
+  }, [view, historyRevision]);
   async function perform(action: () => Promise<void>, busyId: string | null = null) {
     setNotice(null); if (busyId) setBusy(busyId);
     try { await action(); } catch (error) { setNotice(errorText(errorCode(error))); }
     finally { if (busyId) setBusy(null); }
   }
-  async function requestImageAccess(items: MediaSource[]) {
-    const origins = imageOrigins(items);
+  async function requestMediaAccess(items: MediaSource[]) {
+    const origins = mediaOrigins(items);
     if (origins.length) {
       const granted = await chrome.permissions.request({ origins });
       if (!granted) throw new TaskError('permissionRequired');
     }
   }
   async function inspectImage(source: MediaSource, authorized = false) {
-    if (!authorized) await requestImageAccess([source]);
+    if (!authorized) await requestMediaAccess([source]);
     const meta = await rpc<{ width: number; height: number; duration: number | null; frames: number; kind: MediaSource['kind'] }>({ target: 'background', type: 'inspect-image', source });
     const updated = withImageMetadata(source, meta);
     setSources(previous => previous.map(s => s.id === source.id ? updated : s));
@@ -75,7 +97,8 @@ function App() {
     setSelected(previous => ({ ...previous, [source.id]: [defaultSegment(source)] }));
   }
   function changeClip(sourceId: string, id: string, patch: Partial<Segment>) {
-    setSelected(previous => ({ ...previous, [sourceId]: previous[sourceId].map(s => s.id === id ? { ...s, ...patch } : s) }));
+    const duration = sources.find(source => source.id === sourceId)?.duration ?? null;
+    setSelected(previous => ({ ...previous, [sourceId]: previous[sourceId].map(s => s.id === id ? editSegment(s, patch, duration) : s) }));
   }
   const chosen = sources.filter(s => selected[s.id]);
   const sourceName = (source: MediaSource) => sourceNames[source.id] ?? source.title;
@@ -87,8 +110,8 @@ function App() {
   async function generate() {
     validateSettings(settings);
     for (const source of chosen) validateOutputName(sourceName(source));
-    // v0.1.4: request every selected image origin within the click gesture, before any decode awaits.
-    await requestImageAccess(chosen);
+    // v0.1.6: request selected download/resolver origins in the gesture, before any network await.
+    await requestMediaAccess(chosen);
     const items: { source: MediaSource; segment: Segment; settings: ExportSettings }[] = [];
     for (let source of chosen) {
       let clips = selected[source.id];
@@ -96,7 +119,7 @@ function App() {
         source = await inspectImage(source, true); clips = initializeClips(clips, source);
       }
       source = { ...source, title: validateOutputName(sourceName(source)) };
-      for (const segment of clips) { validateSegment(segment, source.duration, settings.fps, settings.speed); items.push({ source, segment, settings }); }
+      for (const clip of clips) { items.push({ source, segment: prepareSegment(clip, source, settings.fps, settings.speed), settings }); }
     }
     await rpc({ target: 'background', type: 'save-preferences', settings });
     await rpc({ target: 'background', type: 'enqueue', items }); await refreshJobs();
@@ -107,29 +130,52 @@ function App() {
     const pattern = httpOrigin(page);
     if (!await chrome.permissions.request({ origins: [pattern] })) throw new TaskError('permissionRequired');
     const id = 'site-' + [...pattern].reduce((hash, char) => Math.imul(hash, 31) + char.charCodeAt(0) | 0, 0).toString(16).replace('-', 'n');
-    const scripts = await chrome.scripting.getRegisteredContentScripts({ ids: [id] });
-    // v0.1.1: registration must precede player contextmenu listeners on future page loads.
-    const registration: chrome.scripting.RegisteredContentScript = { id, matches: [pattern], js: ['content.js'], runAt: 'document_start', allFrames: true, persistAcrossSessions: true };
-    if (!scripts.length) await chrome.scripting.registerContentScripts([registration]);
-    else await chrome.scripting.updateContentScripts([registration]);
+    const registrations: chrome.scripting.RegisteredContentScript[] = [
+      { id, matches: [pattern], js: ['content.js'], runAt: 'document_start', allFrames: true, persistAcrossSessions: true },
+      { id: `media-${id}`, matches: [pattern], js: ['page-observer.js'], world: 'MAIN', runAt: 'document_start', allFrames: true, persistAcrossSessions: true },
+    ];
+    const existing = await chrome.scripting.getRegisteredContentScripts();
+    for (const registration of registrations) {
+      if (existing.some(script => script.id === registration.id)) await chrome.scripting.updateContentScripts([registration]);
+      else await chrome.scripting.registerContentScripts([registration]);
+    }
     setNotice(t('siteEnabled'));
   }
   async function showPreview(job: Job) {
-    const blob = await getResult(job.id); if (!blob) throw new TaskError('invalidOutput');
+    const request = ++previewRequest.current;
+    const blob = await getResult(job.id); if (!blob) throw new TaskError('resultUnavailable');
+    if (request !== previewRequest.current) return;
     setPreview({ job, url: URL.createObjectURL(blob) });
   }
   function restoreJob(job: Job) {
     const source = sources.find(s => s.id === job.source.id && s.documentKey === job.source.documentKey);
     if (!source) { setNotice(errorText('sourceGone')); return; }
-    setSettings(job.settings); setSelected(previous => ({ ...previous, [source.id]: [{ ...job.segment, id: crypto.randomUUID() }] }));
+    setSettings(job.settings); setSelected(previous => ({ ...previous, [source.id]: initializeClips([{ ...job.segment, id: crypto.randomUUID() }], source) }));
     setSourceNames(previous => ({ ...previous, [source.id]: jobName(job) }));
+    setView('create');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
-  const ready = jobs.filter(j => j.stage === 'completed');
+  const shownJobs = view === 'create' ? jobs : history.filter(job => (historyFilter === 'all' || job.stage === historyFilter) &&
+    `${jobName(job)} ${job.source.mediaPageUrl ?? job.source.pageUrl}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const ready = shownJobs.filter(hasResult);
+  async function confirmCleanup() {
+    const request = cleanup!; setCleanup(null);
+    const result = await rpc<CacheSummary>({ target: 'background', type: request.kind === 'cache' ? 'clear-cache' : 'clear-history', ids: request.ids });
+    await refreshJobs();
+    setCache(await rpc<CacheSummary>({ target: 'background', type: 'cache-summary' }));
+    setNotice(t(request.kind === 'cache' ? 'cacheCleared' : 'historyCleared', [number(result.ids.length, 0), number(result.bytes / 1_000_000)]));
+  }
   return <main>
     <header className="brand"><div className="brand-icon"><span>G</span><i /></div><div><strong>Gif Toolkit<span className="version">{chrome.runtime.getManifest().version}</span></strong><p>{t('tagline')}</p></div><span className="local-badge"><i />{t('localBadge')}</span></header>
-    <section className="intro"><div><h1>{t('sourcesTitle')}</h1><p>{t('sourcesHint')}</p></div><button className="icon-button refresh" disabled={!!busy} onClick={() => void perform(async () => { acceptSources(await rpc<MediaSource[]>({ target: 'background', type: 'scan' })); }, 'scan')} aria-label={t('refresh')} title={t('refresh')}>↻</button></section>
+    <nav className="view-nav" aria-label={t('navigation')}><button aria-pressed={view === 'create'} onClick={() => setView('create')}>{t('createView')}</button>
+      <button aria-pressed={view === 'history'} onClick={() => setView('history')}>{t('historyTitle')}<span>{history.length}</span></button></nav>
     {notice && <div role="alert" className="notice"><span>{notice}</span><button aria-label={t('closePreview')} onClick={() => setNotice(null)}>×</button></div>}
+    <div hidden={view !== 'create'}>
+    <section className="intro"><div><h1>{t('sourcesTitle')}</h1><p>{t('sourcesHint')}</p></div><button className="icon-button refresh" disabled={!!busy} onClick={() => void perform(async () => { acceptSources(await rpc<MediaSource[]>({ target: 'background', type: 'scan' })); }, 'scan')} aria-label={t('refresh')} title={t('refresh')}>↻</button></section>
+    {missingFrameOrigins.length > 0 && <div className="notice"><span>{t('embeddedMediaHint', missingFrameOrigins.map(origin => new URL(origin).host).join(', '))}</span><button onClick={() => void perform(async () => {
+      if (!await chrome.permissions.request({ origins: missingFrameOrigins })) throw new TaskError('permissionRequired');
+      acceptSources(await rpc<MediaSource[]>({ target: 'background', type: 'scan', tabId: sourceTab.current }));
+    })}>{t('enableEmbeddedMedia')}</button></div>}
     {!sources.length ? <div className="empty"><div className="empty-art"><span>▶</span><i>GIF</i></div><h2>{busy === 'scan' ? t('scanning') : t('emptyTitle')}</h2><p>{t('emptyHint')}</p></div> : <>
       <div className="source-list">{sources.map(source => <button key={source.id} className={`source ${selected[source.id] ? 'selected' : ''}`} onClick={() => void perform(() => toggle(source), source.id)} disabled={!!busy} aria-pressed={!!selected[source.id]}>
         <div className="thumbnail">{source.poster ? <img src={source.poster} alt="" referrerPolicy="no-referrer" /> : <span>▶</span>}<small>{t((source.kind === 'video' ? 'sourceVideo' : source.kind === 'gif' ? 'sourceGif' : source.kind === 'image' ? 'sourceImage' : 'sourceWebp'))}</small></div>
@@ -150,6 +196,9 @@ function App() {
         </div>
         {chosen.map(source => <div className="clip-group" key={source.id}>
           <div className="clip-source"><strong title={sourceName(source)}>{sourceName(source)}</strong><button className="text-button" disabled={!!busy || source.duration === null} onClick={() => setSelected(previous => ({ ...previous, [source.id]: [...previous[source.id], defaultSegment(source)] }))}>+ {t('addClip')}</button></div>
+          {source.kind === 'video' && !source.youtubeVideoId && ((source.resources?.length ?? 0) > 1 || source.resourceSelectionRequired) && source.url.startsWith('blob:') && <label>{t('mediaResource')}<select value={source.resource?.url ?? ''} onChange={event => setSources(previous => previous.map(item => item.id === source.id ? { ...item, resource: item.resources?.find(resource => resource.url === event.target.value) } : item))}>
+            <option value="">{t('chooseMediaResource')}</option>{source.resources!.map(resource => <option key={resource.url} value={resource.url}>{new URL(resource.url).host}{new URL(resource.url).pathname}</option>)}
+          </select><span className="fine-print">{t('mediaResourceHint')}</span></label>}
           <label className="output-name">{t('outputName')}<input type="text" maxLength={200} value={sourceName(source)} onChange={event => setSourceNames(previous => ({ ...previous, [source.id]: event.target.value }))} /></label>
           <p className="name-hint">{t('outputNameHint')}</p>
           {source.kind !== 'video' && !source.frameCount && <button className="text-button" disabled={!!busy} onClick={() => void perform(async () => { await inspectImage(source); }, source.id)}>{busy === source.id ? t('loadingImage') : t('readAnimation')}</button>}
@@ -181,20 +230,37 @@ function App() {
       {chosen.some(s => s.kind === 'video') && <p className="player-notice"><span>ⓘ</span>{t('playerNotice')}</p>}
       <button className="generate" disabled={!settingsReady || !!busy || !clipCount || chosen.some(s => s.kind === 'video' && s.duration === null)} onClick={() => void perform(generate, 'generate')}><span aria-hidden="true">✦</span>{busy === 'generate' ? t('submitting') : clipCount === 1 ? t('generateOne') : t('generate', String(clipCount))}<span aria-hidden="true">→</span></button>
     </>}
-    <section className="results"><div className="section-title"><h2>{t('tasksTitle')}<span className="result-count">{jobs.length}</span></h2>{ready.length > 1 && <button className="text-button" onClick={() => void perform(async () => { for (const job of ready) await download(job, false); })}>{t('downloadAll')}</button>}</div><p className="fine-print">{t('tasksHint')}</p>
-      {!jobs.length && <div className="tasks-empty">{t('tasksEmpty')}</div>}
-      {jobs.map(job => <article key={job.id} className={`job ${job.stage}`} data-job-id={job.id} data-stage={job.stage}>
-        <div className="job-top"><span className="job-symbol">{job.stage === 'completed' ? '✓' : job.stage === 'failed' ? '!' : '◷'}</span><div><strong>{jobName(job)}</strong><p>{time(job.segment.start)}–{time(job.segment.end)} · {number(job.settings.speed)}{t('speedUnit')}</p></div><span className="job-status">{stageText(job.stage)}</span></div>
+    </div>
+    {view === 'history' && <section className="history-tools">
+      <div className="intro"><div><h1>{t('historyTitle')}</h1><p>{t('historyHint', String(POLICY.historyCount))}</p></div></div>
+      <div className="storage-card"><div><h2>{t('cacheTitle')}</h2><strong>{cache ? t('cacheUsage', [number(cache.bytes / 1_000_000), number(cache.ids.length, 0)]) : '—'}</strong></div>
+        <button className="secondary-button" disabled={!!busy || !cache?.ids.length} onClick={() => void perform(async () => {
+          const snapshot = await rpc<CacheSummary>({ target: 'background', type: 'cache-summary' });
+          setCache(snapshot); if (snapshot.ids.length) setCleanup({ kind: 'cache', ...snapshot });
+        }, 'cache-summary')}>{t('clearCache')}</button><p>{t('cacheHint')}</p></div>
+      <div className="history-filters"><label>{t('historySearch')}<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={t('historySearchHint')} /></label>
+        <label>{t('historyStatus')}<select value={historyFilter} onChange={event => setHistoryFilter(event.target.value)}>
+          <option value="all">{t('historyAll')}</option>{(['completed', 'failed', 'cancelled'] as const).map(stage => <option key={stage} value={stage}>{stageText(stage)}</option>)}
+        </select></label></div>
+      <div className="history-actions"><span>{t('historyCount', number(shownJobs.length, 0))}</span><button disabled={!!busy || !history.length} onClick={() => setCleanup({ kind: 'history', ids: history.map(job => job.id), bytes: cache?.bytes ?? 0 })}>{t('clearHistory')}</button></div>
+    </section>}
+    <section className="results"><div className="section-title"><h2>{t(view === 'history' ? 'historyResults' : 'tasksTitle')}<span className="result-count">{shownJobs.length}</span></h2>{ready.length > 1 && <button className="text-button" onClick={() => void perform(async () => { for (const job of ready) await download(job, false); })}>{t('downloadAll')}</button>}</div>{view === 'create' && <p className="fine-print">{t('tasksHint')}</p>}
+      {!shownJobs.length && <div className="tasks-empty">{t(view === 'history' ? history.length ? 'historyNoMatches' : 'historyEmpty' : 'tasksEmpty')}</div>}
+      {shownJobs.map(job => <article key={job.id} className={`job ${job.stage}`} data-job-id={job.id} data-stage={job.stage}>
+        <div className="job-top"><span className="job-symbol">{job.stage === 'completed' ? '✓' : job.stage === 'failed' ? '!' : '◷'}</span><div><strong>{jobName(job)}</strong><p>{time(job.segment.start)}–{time(job.segment.end)} · {number(job.settings.speed)}{t('speedUnit')}</p></div><span className="job-status">{job.result?.clearedAt !== undefined ? t('fileCleared') : stageText(job.stage)}</span></div>
+        {view === 'history' && <div className="history-origin"><time dateTime={new Date(job.createdAt).toISOString()}>{dateTime(job.createdAt)}</time><a href={job.source.mediaPageUrl ?? job.source.pageUrl} target="_blank" rel="noreferrer">{t('openSource')} ↗</a></div>}
         {!isTerminal(job.stage) && <><progress max={1} value={job.progress} /><div className="progress-detail"><span>{job.attempt ? t('attempt', String(job.attempt)) : stageText(job.stage)}</span><span>{Math.round(job.progress * 100)}%</span></div></>}
         {job.result && <div className="result-meta"><b>{number(job.result.bytes / 1_000_000)} MB</b><span>{job.result.width} × {job.result.height}</span><span>{t('clipDuration', number(job.result.duration))}</span></div>}
-        {job.stage === 'completed' && <><label className="output-name">{t('outputName')}<input type="text" maxLength={200} value={jobName(job)} onChange={event => setJobNames(previous => ({ ...previous, [job.id]: event.target.value }))} /></label><p className="filename-preview">{makeFilename(job, jobName(job))}</p></>}
+        {hasResult(job) && <><label className="output-name">{t('outputName')}<input type="text" maxLength={200} value={jobName(job)} onChange={event => setJobNames(previous => ({ ...previous, [job.id]: event.target.value }))} /></label><p className="filename-preview">{makeFilename(job, jobName(job))}</p></>}
+        {job.result?.clearedAt !== undefined && <p className="fine-print cleared-note">{t('fileClearedHint')}</p>}
         {job.error && job.stage !== 'cancelled' && <p className="job-error">{errorText(job.error)}</p>}
-        <div className="job-actions">{job.stage === 'completed' && <><button className="save" onClick={() => void perform(() => download(job, true))}>↓ {t('download')}</button><button onClick={() => void perform(() => showPreview(job))}>{t('preview')}</button></>}
+        <div className="job-actions">{hasResult(job) && <><button className="save" onClick={() => void perform(() => download(job, true))}>↓ {t('download')}</button><button onClick={() => void perform(() => showPreview(job))}>{t('preview')}</button></>}
           {!isTerminal(job.stage) ? <button onClick={() => void perform(async () => { await rpc({ target: 'background', type: 'cancel', id: job.id }); await refreshJobs(); })}>{t('cancel')}</button> : <><button onClick={() => restoreJob(job)}>{t('editAgain')}</button><button className="delete" aria-label={t('delete')} title={t('delete')} onClick={() => void perform(async () => { await rpc({ target: 'background', type: 'delete', id: job.id }); await refreshJobs(); })}>×</button></>}
         </div>
       </article>)}
     </section>
     <footer>{t('footer')}</footer>
+    {cleanup && <CleanupDialog request={cleanup} onCancel={() => setCleanup(null)} onConfirm={() => void perform(confirmCleanup, 'cleanup')} />}
     {preview && <div className="modal-backdrop" onClick={() => setPreview(null)}><section className="preview-modal" role="dialog" aria-modal="true" aria-label={t('preview')} onClick={event => event.stopPropagation()}><button className="preview-close" onClick={() => setPreview(null)} aria-label={t('closePreview')}>×</button><div className="checker"><img src={preview.url} alt={jobName(preview.job)} /></div><p>{preview.job.result?.width} × {preview.job.result?.height} · {number((preview.job.result?.bytes ?? 0) / 1_000_000)} MB</p><button className="save" onClick={() => void perform(() => download(preview.job, true))}>{t('download')}</button></section></div>}
   </main>;
 }

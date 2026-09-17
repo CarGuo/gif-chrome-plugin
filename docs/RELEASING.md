@@ -21,9 +21,11 @@
 npm ci
 npm run check
 npx playwright install chromium
+npm run test:transports
 npm run test:e2e
 npm run test:drop-frames
 npm run test:preferences
+npm run test:history
 npm run test:context-menu
 npm run test:download
 ```
@@ -43,7 +45,7 @@ npm run release:verify
 | 文件 | 用途 |
 | --- | --- |
 | `gif-toolkit-chrome-<version>.zip` | 用户安装；根目录包含 `manifest.json`、编码器和许可证 |
-| `gif-toolkit-chrome-<version>-third-party-sources.zip` | 19 个固定版本的编码器 / 依赖源码归档及构建索引 |
+| `gif-toolkit-chrome-<version>-third-party-sources.zip` | 22 个固定版本的源码归档、Mediabunny 对应源码及构建索引 |
 | `SHA256SUMS.txt` | 两个 ZIP 的 SHA-256 |
 
 源码附件从公开固定 URL 获取，缓存到 `artifacts/vendor-sources/`，不读取 `.env`。首次下载需要网络；命中缓存仍会校验摘要。具体上游版本、移动分支的解析时间、构建命令和可重复构建边界见 [SOURCES.md](../third_party/SOURCES.md)。
@@ -58,23 +60,25 @@ npm run release:verify
 
 [CI and Release](../.github/workflows/ci.yml) 会在推送 `v*` tag 时自动执行完整测试、打包与发布。版本必须是 `major.minor.patch` 三段数字，tag 必须严格等于 `v` + `package.json.version`，并与 `package-lock.json` 两处版本一致；不一致立即失败。`0.x` 自动标记 **pre-release**，`1.0.0` 起为正式 Release。Chrome 清单不接受 `-beta` 一类后缀，因此预览状态通过 Release 属性表示。
 
-以下以**未来的 0.1.6** 为例；发布前须先完成该版本的实际变更、文档和验收，不要仅为触发 CI 空升版本：
+以下以 **0.1.9** 为例；实际发布使用尚未存在的版本 tag。发布前须先完成该版本的实际变更、文档和验收，不要仅为触发 CI 空升版本：
 
 ```sh
-npm version 0.1.6 --no-git-tag-version
-# 更新 CHANGELOG、版本文档及 docs/releases/v0.1.6.md，检查后提交。
+npm version 0.1.9 --no-git-tag-version
+# 更新 CHANGELOG、版本文档及 docs/releases/v0.1.9.md，检查后提交。
+# 同时暂存本次修改的源码、测试和许可证。
 git add package.json package-lock.json CHANGELOG.md README.md README.en.md docs third_party/SOURCES.md
-git commit -m "Release Gif Toolkit Chrome v0.1.6"
-git tag -a v0.1.6 -m "Gif Toolkit Chrome v0.1.6"
+git commit -m "Release Gif Toolkit Chrome v0.1.9"
 git push origin main
-git push origin v0.1.6
+# main CI 通过后，在同一提交打 tag。
+git tag -a v0.1.9 -m "Gif Toolkit Chrome v0.1.9"
+git push origin v0.1.9
 ```
 
 tag 必须指向包含该工作流的提交。之前已经推送的 `v0.1.5` 不会因新增 CI 被追溯发布；不移动旧 tag、不覆盖旧发行包。本次 CI 配置本身不改变扩展版本。
 
 打开仓库 [Actions](https://github.com/CarGuo/gif-chrome-plugin/actions/workflows/ci.yml) 查看进度。顺序为：
 
-1. 校验版本，安装锁定依赖，运行类型检查、单元测试、生产构建及五组浏览器测试。
+1. 校验版本，安装锁定依赖，运行类型检查、单元测试、生产构建及七组浏览器测试（媒体获取、端到端、下载、丢帧、偏好、历史清理、右键）。
 2. 生成扩展 ZIP、固定来源的第三方源码 ZIP、`SHA256SUMS.txt`，运行 `release:verify`。
 3. 只把三个校验过的附件交给独立发布作业，再核对一次 SHA-256。
 4. 创建该 tag 的草稿 Release，优先使用 `docs/releases/<tag>.md`；没有该文件时使用 GitHub 自动生成的发布说明。

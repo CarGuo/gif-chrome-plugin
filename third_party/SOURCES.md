@@ -1,15 +1,15 @@
 # Encoder source distribution
 
-Gif Toolkit Chrome v0.1.5 distributes the **unmodified** ESM JavaScript and single-threaded WASM files from npm `@ffmpeg/core@0.12.10`. The JavaScript wrapper is `@ffmpeg/ffmpeg@0.12.15`. The wrapper's MIT license does not replace the GPL license of the compiled core.
+Gif Toolkit Chrome v0.1.9 distributes the **unmodified** ESM JavaScript and single-threaded WASM files from npm `@ffmpeg/core@0.12.10`. The JavaScript wrapper is `@ffmpeg/ffmpeg@0.12.15`. The wrapper's MIT license does not replace the GPL license of the compiled core.
 
 ## Download
 
-The [v0.1.5 release](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.5) provides:
+The packaging commands produce the following files in `artifacts/`. The tag workflow verifies and publishes them together on the [v0.1.9 release page](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.9).
 
-- `gif-toolkit-chrome-0.1.5.zip`: loadable extension with license texts and this source index.
-- `gif-toolkit-chrome-0.1.5-third-party-sources.zip`: encoder build source, FFmpeg and all dependency source archives listed in `sources.lock.json`, including Emscripten and its SDL2 port source.
+- `gif-toolkit-chrome-0.1.9.zip`: loadable extension with license texts and this source index.
+- `gif-toolkit-chrome-0.1.9-third-party-sources.zip`: encoder build source, FFmpeg and all 22 source archives listed in `sources.lock.json`, including Emscripten and its SDL2 port source, plus the Mediabunny sources.
 - `SHA256SUMS.txt`: SHA-256 checksums for both ZIP files. Each inner source archive also has its own SHA-256 in `sources.lock.json`.
-- GitHub's tag source archive: the extension's TypeScript/React source, tests, package lock, packaging scripts and these notices.
+- GitHub's tag source archive supplies the extension's TypeScript/React source, tests, package lock, packaging scripts and these notices.
 
 No GitHub token is required to build the extension. Access to release files follows the repository's visibility and GitHub access controls.
 
@@ -41,3 +41,14 @@ This release ships upstream npm binaries; rebuilding the toolchain locally has n
 In the Gif Toolkit repository, run `npm run package:sources`. It downloads only the pinned public source URLs and verifies all SHA-256 values; cached archives are verified again before reuse. It never reads `.env`. `npm run release:verify` checks both final ZIPs and generates `SHA256SUMS.txt`.
 
 License texts are under `licenses/` beside this file in the extension, and inside each upstream source archive. Libraries and optional source files keep their own copyright and license terms.
+
+## Added in 0.1.6
+
+- `gifsicle-wasm-browser` 1.5.19: the build writes `tool.workerLocalUrl` verbatim to the extension as `gifsicle-worker.js`. Its upstream source snapshot and Gifsicle 1.92 source are included in the lock and companion archive. The referenced `wasm-codecs` Dockerfile/build script documents the Emscripten build used as the wrapper’s starting point.
+- Mediabunny 1.56.3: its exact `src/`, package metadata and MPL-2.0 notice from the pinned npm package are included under `mediabunny/` in the companion source archive. The extension does not modify these sources.
+
+## Added in 0.1.7
+
+- `googlevideo` 4.1.1 and `mpd-parser` 1.4.0, with their runtime dependencies, are bundled locally. Versions and npm integrity values are pinned in `package-lock.json`; upstream license texts are distributed under `third_party/licenses/` and listed in `THIRD_PARTY_NOTICES.md`.
+- `@bufbuild/protobuf` 2.15.0 provides the public protobuf wire reader/writer. Its Apache-2.0 license is from upstream revision `f72f5295c853b7be8c0828f350e4f2803c8afdde` (`v2.15.0`). The upstream Google BSD notice from its wire/varint implementation is preserved separately in `licenses/bufbuild-protobuf/BSD-NOTICE.txt`.
+- YouTube session binding preserves unknown protobuf client-identity fields without modifying the upstream protocol library. No remote player JavaScript is evaluated, and playback tokens are not included in either archive.

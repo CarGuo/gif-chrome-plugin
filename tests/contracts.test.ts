@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { candidates } from '../src/shared/encoding';
-import { defaultSegment, DEFAULT_SETTINGS, fitDimensions, outputDuration, sampleCount, sampleTime, validateSegment, validateSettings, validateWorkload, type MediaSource } from '../src/shared/model';
+import { defaultSegment, DEFAULT_SETTINGS, editSegment, fitDimensions, outputDuration, prepareSegment, sampleCount, sampleTime, validateSegment, validateSettings, validateWorkload, type MediaSource } from '../src/shared/model';
 import en from '../src/locales/en.json';
 import zh from '../src/locales/zh_CN.json';
 
@@ -30,6 +29,32 @@ describe('export contract', () => {
     expect(validateSettings({ maxBytes: 4_000_000, maxSide: 800, fps: 12 })).toEqual({ maxBytes: 4_000_000, maxSide: 800, fps: 12, speed: 1, dropFrames: 'none' });
     for (const speed of [0, -1, NaN, Infinity, 0.09, 10.01]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, speed })).toThrow();
   });
+  it('resolves whole-source intent against downloaded metadata in either duration direction', () => {
+    const source = { kind: 'video', duration: 127.893333 } as MediaSource;
+    const full = prepareSegment(defaultSegment(source), source, 10, 5);
+    expect(validateSegment(full, 127.85, 10, 5).end).toBe(127.85);
+    expect(validateSegment(full, 128, 10, 5).end).toBe(128);
+    const legacy = { id: 'old', start: 0, end: source.duration! };
+    expect(validateSegment(prepareSegment(legacy, source, 10, 5), 127.85, 10, 5).end).toBe(127.85);
+  });
+  it('keeps manual trims fixed and does not hide a truly invalid end or start', () => {
+    const source = { kind: 'video', duration: 127.893333 } as MediaSource;
+    const full = defaultSegment(source);
+    const tail = editSegment(full, { start: 120 }, source.duration);
+    expect(validateSegment(tail, 127.85, 10, 5)).toMatchObject({ start: 120, end: 127.85 });
+    const trim = editSegment(full, { start: 5, end: 10 }, source.duration);
+    expect(validateSegment(trim, 127.85, 10, 5)).toMatchObject({ start: 5, end: 10, endMode: 'time' });
+    expect(() => validateSegment(editSegment(full, { end: 127.89 }, source.duration), 127.85, 10, 5)).toThrow('invalidSegment');
+    expect(() => validateSegment(editSegment(full, { start: 128 }, source.duration), 127.85, 10, 5)).toThrow('invalidSegment');
+    expect(editSegment(trim, { end: source.duration! }, source.duration).endMode).toBe('source');
+  });
+  it('enforces the full-source frame budget using the file duration, not a page estimate', () => {
+    const source = { kind: 'video', duration: 60.08 } as MediaSource;
+    const selection = prepareSegment(defaultSegment(source), source, 10, 1);
+    expect(() => validateSegment(selection, 60, 10, 1)).not.toThrow();
+    expect(() => validateSegment(selection, 60.08, 10, 1)).toThrow('tooManyFrames');
+    expect(() => prepareSegment({ ...selection, endMode: 'time' }, source, 10, 1)).toThrow('tooManyFrames');
+  });
   it.each([0.5, 1, 1.5, 2, 10])('maps the complete source range to a constant output rate at %dx', speed => {
     const segment = { id: 'speed', start: 2, end: 8 };
     expect(outputDuration(segment, speed)).toBe(6 / speed);
@@ -51,27 +76,6 @@ describe('export contract', () => {
     expect(() => validateSegment({ id: 'a', start: 12, end: 22 }, 20, 12)).toThrow();
     expect(() => validateSegment({ id: 'a', start: 0, end: 51 }, 100, 12)).toThrow();
     expect(() => validateSegment({ id: 'a', start: 40, end: 90 }, 100, 12)).not.toThrow();
-  });
-  it('quality search never distorts or enlarges the input or exceeds user fps', () => {
-    for (const [width, height] of [[1080, 1920], [96, 40], [2000, 40]]) {
-      for (const c of candidates(width, height, { ...DEFAULT_SETTINGS, fps: 3 })) {
-        expect(c.width).toBeLessThanOrEqual(Math.min(width, 800));
-        expect(c.height).toBeLessThanOrEqual(Math.min(height, 800));
-        expect(c.fps).toBeLessThanOrEqual(3);
-        expect(Math.abs(c.width * height - c.height * width)).toBeLessThanOrEqual(Math.max(width, height));
-      }
-    }
-  });
-  it('compresses at the requested size and fps before any reduction, then re-optimizes each reduced level', () => {
-    const plans = candidates(1920, 1080, DEFAULT_SETTINGS);
-    expect(plans.slice(0, 3)).toEqual([256, 128, 64].map(colors => ({ width: 800, height: 450, fps: 10, colors })));
-    expect(plans[3].width).toBeLessThan(800);
-    expect(plans[3].fps).toBeLessThan(10);
-    for (let index = 0; index < plans.length; index += 3) {
-      const batch = plans.slice(index, index + 3);
-      expect(batch.map(c => c.colors)).toEqual([256, 128, 64]);
-      expect(new Set(batch.map(c => `${c.width}:${c.height}:${c.fps}`)).size).toBe(1);
-    }
   });
   it('bounds the decoded working set for streaming two-pass encoding separately from frame count', () => {
     expect(() => validateWorkload(800, 800, 600)).not.toThrow();

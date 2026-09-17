@@ -138,9 +138,11 @@ try {
   }
   console.log('PASS transparent WebP under all removal modes without residual pixels');
   const [compressed] = await done(await rpc('enqueue', { items: [{ source: sources.find(source => source.title === 'Portrait'), settings: { ...settings, dropFrames: 'every3', maxBytes: 50_000 }, segment: { id: 'budget', start: 0, end: 1.5 } }] }));
-  assert.ok(compressed.attempt > 3 && compressed.result.height < 800 && compressed.result.bytes <= 50_000, JSON.stringify(compressed));
+  // v0.1.6: size prediction and optimization precede this explicitly requested frame removal.
+  assert.ok(compressed.attempt <= 4 && compressed.result.height < 800 && compressed.result.bytes <= 50_000, JSON.stringify({ result: compressed.result, metrics: compressed.metrics }));
+  assert.equal(compressed.result.frames, 10, 'preserve the requested 10 fps clock before removing every third frame');
   assert.ok(Math.abs(compressed.result.duration - 1.5) < 0.011);
-  console.log('PASS optional removal combined with automatic size/fps reduction and recompression');
+  console.log('PASS resize/optimization followed by explicit frame removal, with the requested clock preserved');
   assert.deepEqual(errors, []);
   await writeFile(resolve(artifacts, 'verification.json'), JSON.stringify({ date: new Date().toISOString(), version: manifest.version, jobs: [uiJob, ...jobs, hold, ...speedJobs, ...fractional, ...alphaJobs, compressed].map(({ settings, result, attempt }) => ({ settings, result, attempt })), errors }, null, 2));
 } finally { await context.close(); }

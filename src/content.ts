@@ -1,4 +1,5 @@
-import { fitDimensions, POLICY, TaskError, errorCode, type MediaSource, type Reply } from './shared/model';
+import { downloadBlob } from './shared/download';
+import { TaskError, errorCode, POLICY, type MediaSource, type Reply } from './shared/model';
 import { contextTarget } from './shared/context-target';
 import { mediaTitle } from './shared/media-title';
 
@@ -9,7 +10,7 @@ if (!window.__gifToolkitLoaded) {
   const ids = new WeakMap<Element, { id: string; signature: string }>();
   const elements = new Map<string, HTMLVideoElement | HTMLImageElement>();
   let rightTarget: Element | undefined;
-  let session: { token: string; video: HTMLVideoElement; source: string; page: string; time: number; paused: boolean; rate: number; muted: boolean; hold: () => void; timer?: ReturnType<typeof setTimeout> } | undefined;
+  const reads = new Map<string, AbortController>();
 
   function mediaElements(root: Document | ShadowRoot): (HTMLVideoElement | HTMLImageElement)[] {
     const media = [...root.querySelectorAll<HTMLVideoElement | HTMLImageElement>('video,img')];
@@ -32,7 +33,9 @@ if (!window.__gifToolkitLoaded) {
       if (previous) elements.delete(previous.id);
       ids.set(el, { id: crypto.randomUUID(), signature });
     }
-    return ids.get(el)!.id;
+    const id = ids.get(el)!.id;
+    media.dataset.gifToolkitId = id;
+    return id;
   }
   function scan(focus?: { useContext?: boolean; srcUrl?: string; mediaType?: string }): MediaSource[] {
     const result: MediaSource[] = [];
@@ -48,6 +51,7 @@ if (!window.__gifToolkitLoaded) {
       const title = mediaTitle(el, result.length);
       result.push({ id, documentKey, tabId: -1, frameId: -1, kind,
         url: el.currentSrc || el.src, pageUrl: location.href, title: title.slice(0, 200),
+        mediaPageUrl: (el.closest('article')?.querySelector('a:has(time)') as HTMLAnchorElement | null)?.href,
         width: isVideo ? el.videoWidth : el.naturalWidth, height: isVideo ? el.videoHeight : el.naturalHeight,
         duration, currentTime: isVideo ? el.currentTime : 0,
         poster: isVideo ? el.poster || undefined : (el.currentSrc || el.src), selected: !!focus?.useContext && rightTarget === el });
@@ -64,84 +68,37 @@ if (!window.__gifToolkitLoaded) {
     }
   }, true);
 
-  async function restore(token: string) {
-    if (!session || session.token !== token) return;
-    const state = session; session = undefined; clearTimeout(state.timer);
-    state.video.removeEventListener('play', state.hold, true);
-    if (!state.video.isConnected || state.source !== state.video.currentSrc || state.page !== location.href) return;
-    state.video.currentTime = state.time; state.video.playbackRate = state.rate; state.video.muted = state.muted;
-    if (!state.paused) await state.video.play().catch(() => {});
-  }
-  function check(token: string) {
-    if (!session || session.token !== token) throw new TaskError('cancelled');
-    if (!session.video.isConnected) throw new TaskError('sourceGone');
-    if (session.source !== session.video.currentSrc || session.page !== location.href) throw new TaskError('sourceChanged');
-    clearTimeout(session.timer);
-    // v0.1: lease prevents a terminated extension task from leaving the user's player paused indefinitely.
-    session.timer = setTimeout(() => void restore(token).catch(() => {}), POLICY.seekTimeoutMs * 2);
-    return session.video;
-  }
-  async function seek(video: HTMLVideoElement, time: number) {
-    if (video.readyState >= 2 && Math.abs(video.currentTime - time) < 0.002) return;
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => finish(new TaskError('seekFailed')), POLICY.seekTimeoutMs);
-      let callback = 0;
-      const finish = (error?: Error) => {
-        clearTimeout(timer); video.removeEventListener('error', fail); video.removeEventListener('seeked', onSeeked);
-        if (callback) video.cancelVideoFrameCallback(callback);
-        error ? reject(error) : resolve();
-      };
-      const fail = () => finish(new TaskError('seekFailed'));
-      const onSeeked = () => {
-        video.pause();
-        if (video.readyState >= 2 && Math.abs(video.currentTime - time) < 0.1) finish();
-      };
-      // The seeked event denotes a decoded seek result even in a paused / background player.
-      video.addEventListener('seeked', onSeeked); video.addEventListener('error', fail, { once: true });
-      callback = video.requestVideoFrameCallback((_now, metadata) => {
-        if (Math.abs(metadata.mediaTime - time) < 0.15 && !video.seeking) finish();
-      });
-      try { video.currentTime = time; } catch { fail(); }
-    });
+  function selectedVideo(message: Record<string, any>) {
+    if (message.documentKey !== documentKey) throw new TaskError('sourceChanged');
+    const video = elements.get(message.sourceId);
+    if (!(video instanceof HTMLVideoElement) || !video.isConnected) throw new TaskError('sourceGone');
+    if (message.expectedUrl !== (video.currentSrc || video.src) || message.expectedPageUrl !== location.href || (message.expectedPoster && message.expectedPoster !== video.poster)) throw new TaskError('sourceChanged');
+    if (video.mediaKeys) throw new TaskError('protectedMedia');
+    if (message.type === 'inspect' && (!video.videoWidth || !video.videoHeight || video.readyState < 2)) throw new TaskError('sourceNotReady');
+    if (message.type === 'inspect' && !Number.isFinite(video.duration)) throw new TaskError('invalidSegment');
+    return video;
   }
   async function handle(message: Record<string, any>) {
     if (message.type === 'scan') return scan(message.focus);
-    if (message.type === 'restore') { await restore(message.token); return null; }
-    if (message.documentKey !== documentKey) throw new TaskError('sourceChanged');
-    if (message.type === 'begin') {
-      if (session) throw new TaskError('playerBusy');
-      const video = elements.get(message.sourceId);
-      if (!(video instanceof HTMLVideoElement) || !video.isConnected) throw new TaskError('sourceGone');
-      // v0.1: SPA players can reuse a DOM node for a different video after the user selected a clip.
-      if (message.expectedUrl !== video.currentSrc || message.expectedPageUrl !== location.href || (message.expectedPoster && message.expectedPoster !== video.poster)) throw new TaskError('sourceChanged');
-      if (video.mediaKeys) throw new TaskError('protectedMedia');
-      if (!video.videoWidth || !video.videoHeight || video.readyState < 2) throw new TaskError('sourceNotReady');
-      if (!Number.isFinite(video.duration)) throw new TaskError('invalidSegment');
-      // v0.1: custom players may resume automatically after a seek. A capture session owns playback
-      // until release, otherwise asynchronous PNG encoding can sample the next, unintended frame.
-      const hold = () => video.pause();
-      session = { token: message.token, video, source: video.currentSrc, page: location.href,
-        time: video.currentTime, paused: video.paused, muted: video.muted, rate: video.playbackRate, hold };
-      video.addEventListener('play', hold, true); video.muted = true; video.pause(); check(message.token);
-      return { width: video.videoWidth, height: video.videoHeight, duration: video.duration };
-    }
-    if (message.type === 'frame') {
-      const video = check(message.token);
-      if (!Number.isFinite(message.time) || message.time < 0 || message.time >= video.duration) throw new TaskError('invalidSegment');
-      await seek(video, message.time); check(message.token); video.pause();
-      const dims = fitDimensions(video.videoWidth, video.videoHeight, message.maxSide);
-      // Only DOM-dependent pixel extraction is performed here. PNG compression is browser asynchronous work;
-      // GIF quantization/encoding never runs on the page's UI thread.
-      const canvas = new OffscreenCanvas(dims.width, dims.height);
-      const context = canvas.getContext('2d')!;
+    if (message.type === 'cancel-read') { reads.get(message.token)?.abort(); return null; }
+    const video = selectedVideo(message);
+    if (message.type === 'inspect') return { width: video.videoWidth, height: video.videoHeight, duration: video.duration };
+    if (message.type === 'read-blob' || message.type === 'read-sabr') {
+      // v0.1.7: file blobs belong to the page origin. Fetch their bytes here, but never
+      // seek/capture the player. MSE blobs are transport handles, not downloadable files.
+      const sabr = message.type === 'read-sabr';
+      const url = sabr ? new URL(message.url) : new URL(video.currentSrc);
+      if (sabr) {
+        if (!/(^|\.)(youtube\.com|youtube-nocookie\.com)$/.test(location.hostname) || url.protocol !== 'https:' || !url.hostname.endsWith('.googlevideo.com') || url.pathname !== '/videoplayback' || url.searchParams.get('sabr') !== '1' || !(message.body instanceof Uint8Array) || message.body.length > 65536) throw new TaskError('permissionRequired');
+      } else if (url.protocol !== 'blob:') throw new TaskError('sourceChanged');
+      const abort = new AbortController(); reads.set(message.token, abort);
       try {
-        context.drawImage(video, 0, 0, dims.width, dims.height);
-        const blob = await canvas.convertToBlob({ type: 'image/png' });
-        return { blob, ...dims };
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'SecurityError') throw new TaskError('crossOriginPixels');
-        throw error;
-      }
+        // SABR requests belong to the page's playback origin. Only asynchronous network IO
+        // happens here; protocol decoding and video work remain in the dedicated Worker.
+        const blob = await downloadBlob(url.href, abort.signal, undefined, POLICY.inputBytes, async () => true,
+          sabr ? { method: 'POST', body: message.body, credentials: 'omit', headers: { 'Content-Type': 'application/x-protobuf', Accept: 'application/vnd.yt-ump' } } : undefined);
+        selectedVideo(message); return blob;
+      } finally { reads.delete(message.token); }
     }
     throw new TaskError('sourceGone');
   }

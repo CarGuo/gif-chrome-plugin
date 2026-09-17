@@ -10,6 +10,9 @@
 *.gif binary
 *.webp binary
 *.mp4 binary
+*.m4s binary
 *.wasm binary
+# v0.1.9: MPEG-TS fixtures share .ts with TypeScript; text normalization corrupts video bytes.
+tests/fixtures/**/*.ts binary
 # Preserve upstream legal texts byte-for-byte, including their original whitespace.
 third_party/licenses/** -text -whitespace

@@ -11,13 +11,17 @@ export function retainImageMetadata(next: MediaSource[], previous: MediaSource[]
   // v0.1.4: DOM rescans cannot read animation timing. Retain decoded metadata only for the
   // exact same source, so refreshing the list never turns an edited range back into the full clip.
   return next.map(source => {
-    if (source.kind === 'video') return source;
+    if (source.kind === 'video') {
+      const old = previous.find(value => sameSource(value, source));
+      return old?.resource && source.resources?.some(item => item.url === old.resource!.url && item.kind === old.resource!.kind) ? { ...source, resource: old.resource } : source;
+    }
     const old = previous.find(value => sameSource(value, source) && value.frameCount);
     return old ? withImageMetadata(source, { ...old, frames: old.frameCount! }) : source;
   });
 }
 export function initializeClips(clips: Segment[] | undefined, source: MediaSource): Segment[] {
-  return clips?.map(clip => clip.end === 0 ? defaultSegment(source) : clip) ?? [defaultSegment(source)];
+  return clips?.map(clip => clip.end === 0 ? defaultSegment(source)
+    : clip.endMode === 'source' && source.duration !== null ? { ...clip, end: source.duration } : clip) ?? [defaultSegment(source)];
 }
 export function imageOrigins(sources: MediaSource[]): string[] {
   return [...new Set(sources.filter(s => s.kind !== 'video' && !s.url.startsWith('data:')).map(s => httpOrigin(s.url)))];

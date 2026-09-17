@@ -2,9 +2,13 @@ import { build } from 'vite';
 import { build as bundle } from 'esbuild';
 import { mkdir, copyFile, writeFile, readFile, cp } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import gifsicle from 'gifsicle-wasm-browser';
 
 await build();
 await bundle({ entryPoints: ['src/content.ts'], outfile: 'dist/content.js', bundle: true, format: 'iife', target: 'chrome148', sourcemap: true });
+await bundle({ entryPoints: ['src/page-observer-entry.ts'], outfile: 'dist/page-observer.js', bundle: true, format: 'iife', target: 'chrome148', sourcemap: true });
+// v0.1.6: emit the pinned upstream worker verbatim as packaged code, compatible with MV3 CSP.
+await writeFile('dist/gifsicle-worker.js', gifsicle.tool.workerLocalUrl);
 await mkdir('dist/ffmpeg', { recursive: true });
 for (const file of ['ffmpeg-core.js', 'ffmpeg-core.wasm']) {
   await copyFile(resolve('node_modules/@ffmpeg/core/dist/esm', file), resolve('dist/ffmpeg', file));

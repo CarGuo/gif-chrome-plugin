@@ -66,11 +66,16 @@ try {
   const source = sources.find(s => s.title === 'Motion study');
   await page.locator('#first').evaluate(v => { v.pause(); v.currentTime = 0.3; });
   const settings = { maxBytes: 4_000_000, maxSide: 800, fps: 10, speed: 1 };
-  const jobIds = await rpc('enqueue', { items: [
+  // v0.1.7: history and generation may arrive together during a cold offscreen startup.
+  // Neither request may bypass the in-progress document load and return "interrupted".
+  await rpc('list'); await worker.evaluate(() => chrome.offscreen.closeDocument());
+  const [initialHistory, jobIds] = await Promise.all([rpc('list'), rpc('enqueue', { items: [
     { source, settings, segment: { id: 'a', start: 0.5, end: 1.5 } },
     { source: sources.find(s => s.title === 'Portrait movement'), settings, segment: { id: 'b', start: 0.2, end: 1.2 } },
     { source, settings, segment: { id: 'c', start: 1.8, end: 2.4 } },
-  ] });
+  ] })]);
+  assert.ok(Array.isArray(initialHistory) && jobIds.length === 3);
+  console.log('PASS concurrent history/enqueue during cold processor startup');
   async function awaitDone(ids, targetPanel = panel) {
     const start = Date.now(); let previous = '';
     while (Date.now() - start < 180_000) {
@@ -117,9 +122,36 @@ try {
   const compressedIds = await rpc('enqueue', { items: [{ source: sources.find(s => s.title === 'Portrait movement'), settings: { ...settings, maxBytes: 80_000 }, segment: { id: 'compress', start: 0, end: 1.5 } }] });
   const compressed = (await awaitDone(compressedIds))[0];
   assert.equal(compressed.stage, 'completed', JSON.stringify(compressed));
-  assert.ok(compressed.attempt > 3); assert.ok(compressed.result.height < 800); assert.ok(compressed.result.bytes <= 80_000);
+  // v0.1.6 requirement: predict/resize first, preserve 10 fps through optimization. The old
+  // assertion demanded at least four wasted encodes and would enforce the reported regression.
+  assert.ok(compressed.attempt <= 3); assert.ok(compressed.result.height < 800); assert.ok(compressed.result.bytes <= 80_000);
+  assert.equal(compressed.result.frames, 15, 'ordinary fitting must retain the requested frame rate');
+  assert.ok(compressed.metrics.optimizations >= 1);
   assert.ok(Math.abs(compressed.result.duration - 1.5) < 0.2);
-  console.log('PASS actual oversized clip: palette passes, then resize/drop frames, then recompress');
+  console.log('PASS oversized clip: estimate/resize first, optimize with 10 fps preserved', compressed.result);
+  // A stricter budget must exercise the actual final frame-rate phase, not merely its planner.
+  const finalPhaseIds = await rpc('enqueue', { items: [50_000, 1_024].map(maxBytes => ({
+    source: sources.find(s => s.title === 'Portrait movement'), settings: { ...settings, maxBytes },
+    segment: { id: `last-resort-${maxBytes}`, start: 0, end: 1.5 },
+  })) });
+  const [lastResort, unreachable] = await awaitDone(finalPhaseIds);
+  assert.equal(lastResort.stage, 'completed', JSON.stringify(lastResort));
+  const attempts = lastResort.metrics.attempts;
+  assert.equal(attempts[0].fps, 10);
+  assert.ok(attempts[0].bytes > 50_000, 'the spatial/optimization phase must be exhausted first');
+  assert.equal(Math.max(attempts[0].width, attempts[0].height), 240);
+  assert.ok(attempts.at(-1).fps < 10 && attempts.at(-1).fps >= 6);
+  assert.ok(lastResort.metrics.optimizations >= 4);
+  assert.equal(lastResort.result.frames, Math.ceil(1.5 * attempts.at(-1).fps));
+  assert.ok(Math.abs(lastResort.result.duration - 1.5) < 0.011);
+  assert.equal(unreachable.stage, 'failed'); assert.equal(unreachable.error, 'budgetUnreachable');
+  assert.equal(unreachable.result, undefined);
+  assert.equal(await panel.evaluate(async id => {
+    const database = await new Promise(resolve => { const request = indexedDB.open('gif-toolkit', 1); request.onsuccess = () => resolve(request.result); });
+    const saved = await new Promise(resolve => { const request = database.transaction('results').objectStore('results').get(id); request.onsuccess = () => resolve(request.result !== undefined); });
+    database.close(); return saved;
+  }, unreachable.id), false, 'an unreachable budget must not leave a saved oversized GIF');
+  console.log('PASS automatic frame reduction only after spatial/optimization failure; unreachable limits save no output');
   // v0.1.4 regression: right-clicked animation must allow editing before generation, and a rescan
   // must preserve both decoded metadata and the user's ranges instead of silently selecting all.
   await page.locator('img').first().click({ button: 'right' });
@@ -177,7 +209,7 @@ try {
   console.log('PASS reused player nodes cannot silently capture different content');
   await panel.screenshot({ path: resolve(artifacts, 'panel.png'), fullPage: true });
   // Read saved bytes from the same public extension storage used by the preview; parse using an independent reader.
-  const artifactJobs = [...completed, ...imageJobs, ...speedJobs, ...imageSpeedJobs, compressed, ...editedAnimations];
+  const artifactJobs = [...completed, ...imageJobs, ...speedJobs, ...imageSpeedJobs, compressed, lastResort, ...editedAnimations];
   for (const job of artifactJobs) {
     const bytes = await panel.evaluate(async id => {
       const database = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit', 1); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
@@ -188,6 +220,8 @@ try {
     assert.match(job.result.filename, /^[A-Za-z0-9_-]+_[0-9]{13}_[a-f0-9]{32}\.gif$/);
     assert.ok(job.result.filename.includes(`_${job.createdAt}_`));
     assert.ok(frames.length > 1); assert.ok(data.length <= job.settings.maxBytes); assert.ok(parsed.lsd.width <= 800 && parsed.lsd.height <= 800);
+    assert.equal(frames.length, job.result.frames);
+    assert.ok(Math.abs(frames.reduce((sum, frame) => sum + frame.delay / 1000, 0) - job.result.duration) < 0.011);
     assert.ok(frames.some(f => f.patch.some((v, i) => i % 4 !== 3 && v > 0)), 'must contain colored picture data, not just an alpha channel');
     if (job.source.title === 'Transparent WebP') {
       const opaqueCounts = await panel.evaluate(async bytes => {
