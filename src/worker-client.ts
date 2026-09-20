@@ -1,32 +1,50 @@
-import { TaskError } from './shared/model';
+import { POLICY, TaskError } from './shared/model';
 
 export class WorkerClient {
-  private closed = false;
-  private callbacks = new Map<string, { resolve: (data: any) => void; reject: (error: unknown) => void }>();
+  private closed: TaskError | undefined;
+  private callbacks = new Map<string, { resolve: (data: any) => void; reject: (error: unknown) => void; timer?: ReturnType<typeof setTimeout>; timeoutMs: number }>();
   constructor(private worker: Worker, handle?: (type: string, data: any) => Promise<unknown>) {
     worker.onmessage = event => {
+      if (this.closed) return;
+      if (event.data?.activity === true) { this.activity(event.data.id); return; }
       if (event.data?.rpc === true) {
         const { id, type, data } = event.data;
-        void (handle ? handle(type, data) : Promise.reject(new TaskError('permissionRequired')))
+        void Promise.resolve().then(() => handle ? handle(type, data) : Promise.reject(new TaskError('permissionRequired')))
           .then(data => !this.closed && worker.postMessage({ parentReply: true, id, ok: true, data }),
-            error => !this.closed && worker.postMessage({ parentReply: true, id, ok: false, error: error instanceof TaskError ? error.code : 'downloadFailed' }));
+            error => !this.closed && worker.postMessage({ parentReply: true, id, ok: false, error: error instanceof TaskError ? error.code : 'downloadFailed' }))
+          .catch(() => this.close(new TaskError('encodingFailed')));
         return;
       }
-      const response = event.data, callback = this.callbacks.get(response.id);
+      const response = event.data, callback = this.callbacks.get(response?.id);
       if (!callback) return;
+      clearTimeout(callback.timer);
       this.callbacks.delete(response.id);
       response.ok ? callback.resolve(response.data) : callback.reject(new TaskError(response.error));
     };
     worker.onerror = () => this.close(new TaskError('encodingFailed'));
+    worker.onmessageerror = () => this.close(new TaskError('encodingFailed'));
   }
-  request<T>(type: string, data = {}): Promise<T> {
-    if (this.closed) return Promise.reject(new TaskError('cancelled'));
+  private activity(id: string) {
+    const callback = this.callbacks.get(id); if (!callback) return;
+    clearTimeout(callback.timer);
+    callback.timer = setTimeout(() => this.close(new TaskError('workerTimeout')), callback.timeoutMs);
+  }
+  // v0.1.11: bound inactivity, and terminate the owner on timeout. Merely racing a
+  // promise would leave its decoder/network operations alive and the queue occupied.
+  request<T>(type: string, data = {}, timeoutMs = type === 'open' ? POLICY.decodeOpenTimeoutMs : POLICY.seekTimeoutMs as number): Promise<T> {
+    if (this.closed) return Promise.reject(this.closed);
     const id = crypto.randomUUID();
-    return new Promise((resolve, reject) => { this.callbacks.set(id, { resolve, reject }); this.worker.postMessage({ id, type, ...data }); });
+    return new Promise((resolve, reject) => {
+      this.callbacks.set(id, { resolve, reject, timeoutMs }); this.activity(id);
+      try { this.worker.postMessage({ id, type, ...data }); }
+      catch { this.close(new TaskError('encodingFailed')); }
+    });
   }
   close(error = new TaskError('cancelled')) {
-    this.closed = true; this.worker.terminate();
-    for (const callback of this.callbacks.values()) callback.reject(error);
+    if (this.closed) return;
+    this.closed = error; this.worker.terminate();
+    this.worker.onmessage = this.worker.onerror = this.worker.onmessageerror = null;
+    for (const callback of this.callbacks.values()) { clearTimeout(callback.timer); callback.reject(error); }
     this.callbacks.clear();
   }
 }

@@ -17,7 +17,11 @@ function parent<T>(type: string, data: unknown): Promise<T> {
   return new Promise((resolve, reject) => { callbacks.set(id, { resolve, reject }); self.postMessage({ rpc: true, id, type, data }); });
 }
 const authorize = (url: string) => parent<boolean>('authorize', { url });
-const progress = (loaded: number, total: number) => parent<void>('progress', { loaded, total });
+let operationId: string;
+const progress = (loaded: number, total: number) => {
+  self.postMessage({ id: operationId, activity: true });
+  return parent<void>('progress', { loaded, total });
+};
 
 async function download(resource: MediaResource, maxSide: number) {
   const signal = new AbortController().signal;
@@ -138,6 +142,7 @@ self.onmessage = async event => {
     if (callback) event.data.ok ? callback.resolve(event.data.data) : callback.reject(new TaskError(event.data.error));
     return;
   }
+  operationId = id;
   try { self.postMessage({ id, ok: true, data: type === 'youtube' ? await downloadYoutube(session, maxSide) : await download(resource, maxSide) }); }
   catch (error) { self.postMessage({ id, ok: false, error: errorCode(error) }); }
 };

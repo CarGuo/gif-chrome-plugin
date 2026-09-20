@@ -7,7 +7,7 @@ export const POLICY = {
   minimumSide: 240, minimumFps: 6,
   // v0.1.6: bounded, measured resize/optimization search; frame reduction is the final phase.
   probeFrames: 24, probeWindows: 6, probeSide: 320, fitHeadroom: 0.94, resizeAttempts: 3, optimizeAttempts: 3, lossyStep: 40, maxLossy: 120,
-  networkTimeoutMs: 30_000, seekTimeoutMs: 15_000, historyCount: 30,
+  networkTimeoutMs: 30_000, seekTimeoutMs: 15_000, decodeOpenTimeoutMs: 90_000, historyCount: 30,
 } as const;
 export type MediaKind = 'video' | 'gif' | 'webp' | 'image';
 export interface MediaSource {
@@ -39,9 +39,12 @@ export interface Job {
 }
 export const hasResult = (job: Job) => job.stage === 'completed' && !!job.result && job.result.clearedAt === undefined;
 export interface CacheSummary { ids: string[]; bytes: number }
-export interface DownloadSelection { id: string; title: string }
+export interface HistoryProblem { id: string; title?: string; createdAt?: number }
+export interface HistorySnapshot { jobs: Job[]; problems: HistoryProblem[] }
+export interface DownloadSelection { id: string; title: unknown }
 export interface DownloadBatchResult { started: { id: string; downloadId: number }[]; failed: { id: string; error: ErrorCode }[] }
-export type ErrorCode = 'mediaDiscoveryRequired' | 'ambiguousMedia' | 'invalidName' | 'invalidSettings' | 'invalidSegment' | 'sourceGone' | 'sourceChanged' | 'sourceNotReady' | 'protectedMedia' | 'crossOriginPixels' | 'seekFailed' | 'inputTooLarge' | 'tooManyFrames' | 'downloadFailed' | 'permissionRequired' | 'unsupportedImage' | 'unsupportedVideo' | 'encodingFailed' | 'budgetUnreachable' | 'cancelled' | 'interrupted' | 'invalidOutput' | 'resultUnavailable' | 'noMedia' | 'playerBusy' | 'pageUnavailable' | 'storageFull';
+export const ERROR_CODES = ['mediaDiscoveryRequired', 'ambiguousMedia', 'invalidName', 'invalidSettings', 'invalidSegment', 'sourceGone', 'sourceChanged', 'sourceNotReady', 'protectedMedia', 'crossOriginPixels', 'seekFailed', 'inputTooLarge', 'tooManyFrames', 'downloadFailed', 'permissionRequired', 'unsupportedImage', 'unsupportedVideo', 'encodingFailed', 'budgetUnreachable', 'cancelled', 'interrupted', 'invalidOutput', 'resultUnavailable', 'noMedia', 'playerBusy', 'pageUnavailable', 'storageFull', 'invalidHistory', 'workerTimeout', 'saveFailed'] as const;
+export type ErrorCode = typeof ERROR_CODES[number];
 export class TaskError extends Error {
   constructor(public code: ErrorCode, message?: string) { super(message ?? code); }
 }

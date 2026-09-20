@@ -17,4 +17,5 @@
    Native checkboxes identify files by task, and keyboard users can scroll the region. */
 .result-list{max-height:clamp(260px,60vh,560px);overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable;padding:2px 4px 4px 2px;margin-top:10px;border-radius:12px}
 .result-list:focus-visible{outline:2px solid #507958;outline-offset:2px}.result-list .job:first-child{margin-top:0}.result-list .tasks-empty{margin-top:0}
+.notice>span{white-space:pre-line;overflow-wrap:anywhere}
 .result-selection{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px;padding:9px 0;border-top:1px solid #e0e7da;border-bottom:1px solid #e0e7da;font-size:10px;color:#7a8978}.result-selection>.save{margin-left:auto}.result-selection>.text-button{font-size:10px}.job-select{appearance:auto;width:18px;height:18px;flex:0 0 18px;margin:0 2px;padding:0;accent-color:#426b4d;cursor:pointer}.job-select:focus-visible{outline:2px solid #507958;outline-offset:3px}

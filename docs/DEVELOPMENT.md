@@ -28,6 +28,7 @@ npx playwright install chromium
 | `npm run test:preferences` | 旧 12→10 迁移、自选值保留、命名、历史界面同步 |
 | `npm run test:history` | 历史查询、真实 IndexedDB 清理、跨面板预览释放、下载保留、并发任务及浏览器重启 |
 | `npm run test:results` | 四视频命名、结果独立滚动、勾选保存、实际磁盘文件与关闭面板后的批量保存；`TEST_BROWSER=chrome` 使用本机 Chrome 独立配置 |
+| `npm run test:reliability` | 损坏历史隔离、旧记录迁移、Worker 无响应后的队列恢复、进度存储失败及 UI 删除；`TEST_BROWSER=chrome` 使用本机 Chrome 独立配置 |
 | `npm run test:context-menu` | 媒体、遮罩、普通控件、Alt 和刷新后的右键行为 |
 | `npm run test:download` | 浏览器默认下载及实际文件名 / 字节验证 |
 | `npm run test:transports` | HLS TS / fMP4、DASH、文件 Blob 全下载转换与零页面拖动 |
@@ -42,7 +43,7 @@ npx playwright install chromium
 
 [工作流](../.github/workflows/ci.yml) 在 PR、`main` 推送和 `v*` tag 推送时运行，也可从 Actions 手动运行检查。使用 Ubuntu 24.04、Node.js 22 和锁定依赖对应的 Playwright Chromium；测试走已有的 `channel: chromium` 无头扩展路径。
 
-流程为版本检查 → `npm ci` → `check` → 安装 Chromium / 系统依赖 → `test:transports` → `test:e2e` → `test:download` → `test:drop-frames` → `test:preferences` → `test:history` → `test:results` → `test:context-menu` → 三个发行附件的打包与校验。下载测试依赖前面的真实 GIF 成品，不能单独提前或并行运行。任何一步失败都会阻止发布；可用的测试 JSON / PNG 保留 7 天。真实登录态 X 和联网 YouTube 验收仍按发布指南手工执行。
+流程为版本检查 → `npm ci` → `check` → 安装 Chromium / 系统依赖 → `test:transports` → `test:e2e` → `test:download` → `test:drop-frames` → `test:preferences` → `test:history` → `test:results` → `test:reliability` → `test:context-menu` → 三个发行附件的打包与校验。下载测试依赖前面的真实 GIF 成品，不能单独提前或并行运行。任何一步失败都会阻止发布；可用的测试 JSON / PNG 保留 7 天。真实登录态 X 和联网 YouTube 验收仍按发布指南手工执行。
 
 只有 tag 推送在检查成功后进入独立发布作业，该作业取得 `contents: write`，其余作业仅有读取权限。手动运行 CI 不发布；版本 tag 均发布正式 Release。完整发布和重跑规则见 [发布指南](RELEASING.md)。
 

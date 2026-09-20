@@ -8,7 +8,7 @@ import { acquisition } from './shared/acquisition';
 import { downloadSource } from './shared/download';
 import { errorCode, fitDimensions, isTerminal, outputDuration, sampleCount, sampleTime, POLICY, rpc, TaskError, validateSegment, validateWorkload, type DropFrames, type Job, type Reply } from './shared/model';
 import { makeFilename } from './shared/filename';
-import { clearStoredItems, deleteResult, getCacheSummary, getJob, getJobs, getResult, pruneHistory, removeJob, saveJob, saveJobs, saveResult } from './shared/storage';
+import { clearStoredItems, deleteResult, getCacheSummary, getHistory, getJob, getJobs, getResult, pruneHistory, removeJob, saveJob, saveJobs, saveResult } from './shared/storage';
 import { optimizeGif, WorkerClient } from './worker-client';
 
 const queue: Job[] = [];
@@ -72,8 +72,8 @@ async function processJob(job: Job) {
         });
         if (mode === 'youtube') {
           const session = await rpc<YoutubeSession>({ target: 'background', type: 'resolve-youtube', jobId: job.id });
-          blob = await state.download.request('youtube', { session, maxSide: job.settings.maxSide });
-        } else blob = await state.download.request('download', { resource: chosenResource(job.source), maxSide: job.settings.maxSide });
+          blob = await state.download.request('youtube', { session, maxSide: job.settings.maxSide }, POLICY.networkTimeoutMs * 2);
+        } else blob = await state.download.request('download', { resource: chosenResource(job.source), maxSide: job.settings.maxSide }, POLICY.networkTimeoutMs * 2);
       }
     } finally { metrics.downloadMs = performance.now() - time; state.download?.close(); state.download = undefined; }
     check();
@@ -119,19 +119,23 @@ async function processJob(job: Job) {
       if (!probe) metrics.capturedBytes = bytes;
     }
     let progressWrites = Promise.resolve();
+    let progressFailure: { error: unknown } | undefined;
     let lastProgress = 0;
     const onProgress = ({ progress }: { progress: number }) => {
       if (job.stage !== 'encoding' || performance.now() - lastProgress < 250) return;
       lastProgress = performance.now();
       const value = Math.max(job.progress, Math.min(0.87, 0.58 + 0.29 * Math.max(0, progress)));
-      progressWrites = progressWrites.then(() => update(job, { progress: value }));
+      // v0.1.11: observe rejection immediately; preserve it for the operation to fail
+      // with its real storage error instead of silently poisoning/unhandling the chain.
+      progressWrites = progressWrites.then(() => { if (!progressFailure) return update(job, { progress: value }); })
+        .catch(error => { progressFailure = { error }; });
     };
     ffmpeg.on('progress', onProgress);
     async function exec(args: string[]) {
       const began = performance.now();
       const code = await ffmpeg.exec(args, 90_000);
       const done = performance.now();
-      await progressWrites; check();
+      await progressWrites; if (progressFailure) throw progressFailure.error; check();
       metrics.executions.push({ operation: args.at(-1)!, ms: done - began, progressWaitMs: performance.now() - done });
       if (code !== 0) throw new TaskError('encodingFailed');
     }
@@ -263,11 +267,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     await recovered;
     switch (message.type) {
       case 'list': return (await getJobs()).sort((a, b) => b.createdAt - a.createdAt);
+      case 'history': {
+        const history = await getHistory(); history.jobs.sort((a, b) => b.createdAt - a.createdAt); return history;
+      }
       case 'cache-summary': return getCacheSummary();
       case 'clear-cache':
       case 'clear-history': {
         const mode = message.type === 'clear-cache' ? 'cache' : 'history';
-        const cleared = await clearStoredItems(message.ids, mode);
+        const cleared = await clearStoredItems(message.ids, mode, [...queue.map(job => job.id), ...(current ? [current.job.id] : [])]);
         await chrome.runtime.sendMessage({ type: mode === 'cache' ? 'cache-cleared' : 'jobs-removed', ids: cleared.ids }).catch(() => {});
         return cleared;
       }
@@ -291,7 +298,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return null;
       }
       case 'delete': {
-        const job = await getJob(message.id); if (job && !isTerminal(job.stage)) throw new TaskError('playerBusy');
+        if (queue.some(job => job.id === message.id) || current?.job.id === message.id) throw new TaskError('playerBusy');
         const removed = await removeJob(message.id);
         await chrome.runtime.sendMessage({ type: 'jobs-removed', ids: removed.ids }).catch(() => {});
         return null;

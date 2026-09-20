@@ -10,7 +10,7 @@ declare const ImageDecoder: { new(options: { data: ArrayBuffer; type: string; pr
 let decoder: Decoder | undefined;
 let timings: { startUs: number; endUs: number }[] = [];
 
-async function open(blob: Blob) {
+async function open(blob: Blob, activity: () => void) {
   decoder?.close(); decoder = undefined; timings = [];
   const bytes = await blob.arrayBuffer();
   const prefix = new TextDecoder().decode(bytes.slice(0, 12));
@@ -20,7 +20,7 @@ async function open(blob: Blob) {
   await decoder.tracks.ready; await decoder.completed;
   const count = decoder.tracks.selectedTrack.frameCount;
   if (!count || count > 10_000) throw new TaskError('inputTooLarge');
-  let durationUs = 0, width = 0, height = 0;
+  let durationUs = 0, width = 0, height = 0, lastActivity = performance.now();
   for (let i = 0; i < count; i++) {
     const { image } = await decoder.decode({ frameIndex: i });
     width = image.displayWidth; height = image.displayHeight;
@@ -29,6 +29,7 @@ async function open(blob: Blob) {
     // exact boundaries (e.g. 0.3 + 0.1 + 0.2) inside the previous frame and corrupt held-frame timing.
     const delayUs = Math.max(10_000, image.duration ?? 100_000);
     timings.push({ startUs: durationUs, endUs: durationUs + delayUs }); durationUs += delayUs; image.close();
+    if (performance.now() - lastActivity > 250) { activity(); lastActivity = performance.now(); }
   }
   return { width, height, duration: count === 1 ? null : durationUs / 1_000_000, frames: count, kind: type === 'image/gif' ? 'gif' : 'webp' };
 }
@@ -50,7 +51,7 @@ async function frame(time: number, maxSide: number) {
 self.onmessage = async event => {
   const { id, type, blob, time, maxSide } = event.data;
   try {
-    const data = type === 'open' ? await open(blob) : type === 'frame' ? await frame(time, maxSide) : (decoder?.close(), decoder = undefined, null);
+    const data = type === 'open' ? await open(blob, () => self.postMessage({ id, activity: true })) : type === 'frame' ? await frame(time, maxSide) : (decoder?.close(), decoder = undefined, null);
     self.postMessage({ id, ok: true, data });
   } catch (error) { self.postMessage({ id, ok: false, error: errorCode(error) }); }
 };

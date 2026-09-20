@@ -131,6 +131,46 @@ try {
   await verifyDownloads(four, item => batch.started.find(started => started.downloadId === item.id)?.id);
   check('four explicitly equal titles and repeated saves keep distinct files without replacing or mixing GIF bytes');
 
+  // v0.1.11: submit through UI so per-item validation and retained selections are exercised.
+  await card(jobs[0].id).getByRole('checkbox').check(); await card(jobs[2].id).getByRole('checkbox').check();
+  await card(jobs[0].id).getByRole('textbox', { name: 'GIF name', exact: true }).fill('');
+  const beforeInvalid = new Set((await downloadRecords()).map(item => item.id));
+  await panel.getByRole('button', { name: 'Save selected', exact: true }).click();
+  await panel.getByRole('alert').getByText(/1 downloads started; 1 could not start/).waitFor();
+  assert.match(await panel.getByRole('alert').innerText(), /Same custom name.*Enter a GIF name/s);
+  assert.equal(await card(jobs[0].id).getByRole('checkbox').isChecked(), true);
+  assert.equal(await card(jobs[2].id).getByRole('checkbox').isChecked(), false);
+  const validDespiteBlank = (await downloadRecords()).filter(item => !beforeInvalid.has(item.id)); assert.equal(validDespiteBlank.length, 1);
+  await verifyDownloads(validDespiteBlank, () => jobs[2].id);
+  await card(jobs[0].id).getByRole('textbox', { name: 'GIF name', exact: true }).fill('Rejected save');
+  await card(jobs[2].id).getByRole('checkbox').check();
+  await worker.evaluate(() => {
+    globalThis.originalReviewDownload = chrome.downloads.download;
+    let first = true;
+    chrome.downloads.download = options => {
+      if (!first) return globalThis.originalReviewDownload(options); first = false;
+      return new Promise((resolve, reject) => { globalThis.rejectReviewDownload = () => reject(new Error('Injected download rejection')); });
+    };
+  });
+  const beforeRejection = new Set((await downloadRecords()).map(item => item.id));
+  await panel.getByRole('button', { name: 'Save selected', exact: true }).click();
+  for (let i = 0; i < 100 && !await worker.evaluate(() => !!globalThis.rejectReviewDownload); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  await card(jobs[0].id).getByRole('button', { name: 'Preview GIF', exact: true }).click();
+  assert.equal(await panel.getByRole('dialog').getByRole('button', { name: 'Save GIF', exact: true }).isDisabled(), true);
+  await worker.evaluate(() => globalThis.rejectReviewDownload());
+  await panel.getByRole('alert').getByText(/1 downloads started; 1 could not start/).waitFor();
+  assert.match(await panel.getByRole('alert').innerText(), /could not be saved/);
+  assert.doesNotMatch(await panel.getByRole('alert').innerText(), /encoder/);
+  assert.equal(await panel.locator('.job-select:checked').count(), 1);
+  const failedId = await panel.locator('.job-select:checked').evaluate(input => input.closest('[data-job-id]').dataset.jobId);
+  const savedId = [jobs[0].id, jobs[2].id].find(id => id !== failedId);
+  const validDespiteRejection = (await downloadRecords()).filter(item => !beforeRejection.has(item.id)); assert.equal(validDespiteRejection.length, 1);
+  await verifyDownloads(validDespiteRejection, () => savedId);
+  await panel.getByRole('dialog').getByRole('button', { name: 'Close preview', exact: true }).click();
+  await worker.evaluate(() => { chrome.downloads.download = globalThis.originalReviewDownload; });
+  await panel.locator('.job-select:checked').uncheck();
+  check('blank names and native save rejection affect only their own item; UI identifies failures, retains selection and guards preview saves');
+
   await card(jobs[0].id).getByRole('checkbox').check(); await card(jobs[2].id).getByRole('checkbox').check();
   await rpc('clear-cache', { ids: [jobs[0].id] });
   await card(jobs[0].id).getByText('File cleared', { exact: true }).waitFor();

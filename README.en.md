@@ -4,9 +4,9 @@
 
 A Chrome side panel extension for webpage videos, GIFs and WebP images. Select clips, adjust speed and export locally. Defaults: **4 MB · 800 px longest side · 10 fps**. No desktop application or conversion server required.
 
-[简体中文](README.md) · [Download v0.1.10](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.10) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/CarGuo/gif-chrome-plugin/issues)
+[简体中文](README.md) · [Download v0.1.11](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.11) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/CarGuo/gif-chrome-plugin/issues)
 
-> **Published version: v0.1.10, Chrome 148+ required.** Install in developer mode. The extension is not listed in the Chrome Web Store. See the verification table below for the remaining X and YouTube acceptance gaps.
+> **Published version: v0.1.11, Chrome 148+ required.** Install in developer mode. The extension is not listed in the Chrome Web Store. See the verification table below for the remaining X and YouTube acceptance gaps.
 
 ## Features
 
@@ -23,7 +23,7 @@ A Chrome side panel extension for webpage videos, GIFs and WebP images. Select c
 
 ## Install and update
 
-1. Download **`gif-toolkit-chrome-0.1.10.zip`** from the [release page](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.10) and extract it to a permanent folder.
+1. Download **`gif-toolkit-chrome-0.1.11.zip`** from the [release page](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.11) and extract it to a permanent folder.
 2. Open `chrome://extensions` and enable **Developer mode**.
 3. Click **Load unpacked** and select the extracted folder containing `manifest.json`.
 4. Pin Gif Toolkit to the toolbar.

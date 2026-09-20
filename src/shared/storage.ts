@@ -1,5 +1,6 @@
-import { hasResult, isTerminal, POLICY, TaskError, validateSettings, type CacheSummary, type Job } from './model';
+import { hasResult, isTerminal, POLICY, TaskError, type CacheSummary, type HistorySnapshot, type Job } from './model';
 import { makeFilename } from './filename';
+import { historyProblem, migrateJob } from './history';
 let database: Promise<IDBDatabase> | undefined;
 function db() {
   return database ??= new Promise((resolve, reject) => {
@@ -33,15 +34,32 @@ export async function saveJobs(jobs: Job[]): Promise<void> {
     transaction.onerror = () => reject(transaction.error);
   });
 }
-// v0.1.2: read the old settings schema as 1x so history/re-edit remains usable after an extension update.
-const migrateJob = (job: Job): Job => ({ ...job, settings: validateSettings(job.settings),
-  // v0.1.4: apply the same filename contract to historical results without re-encoding GIF bytes.
-  ...(job.result ? { result: { ...job.result, filename: makeFilename(job) } } : {}) });
 export const getJob = async (id: string): Promise<Job | undefined> => {
   const job = await run<Job | undefined>('jobs', 'readonly', s => s.get(id));
   return job ? migrateJob(job) : undefined;
 };
-export const getJobs = async (): Promise<Job[]> => (await run<Job[]>('jobs', 'readonly', s => s.getAll())).map(migrateJob);
+export async function getHistory(): Promise<HistorySnapshot> {
+  const database = await db();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction('jobs', 'readonly');
+    const snapshot: HistorySnapshot = { jobs: [], problems: [] };
+    const request = transaction.objectStore('jobs').openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result; if (!cursor) return;
+      try { snapshot.jobs.push(migrateJob(cursor.value)); }
+      catch { snapshot.problems.push(historyProblem(String(cursor.primaryKey), cursor.value)); }
+      cursor.continue();
+    };
+    transaction.oncomplete = () => resolve(snapshot);
+    transaction.onabort = transaction.onerror = () => reject(transaction.error ?? request.error);
+  });
+}
+// Processing only consumes validated jobs. Panels use getHistory and display problems separately.
+export const getJobs = async (): Promise<Job[]> => (await getHistory()).jobs;
+function canClean(value: unknown) {
+  try { return isTerminal(migrateJob(value).stage); }
+  catch { return true; } // Invalid records cannot be resumed; their raw data stays until explicit deletion.
+}
 export const getResult = (id: string): Promise<Blob | undefined> => run('results', 'readonly', s => s.get(id));
 export const saveResult = (id: string, blob: Blob) => run('results', 'readwrite', s => s.put(blob, id));
 export const deleteResult = (id: string) => run('results', 'readwrite', s => s.delete(id));
@@ -58,7 +76,7 @@ export async function getCacheSummary(): Promise<CacheSummary> {
       const lookup = transaction.objectStore('jobs').get(cursor.primaryKey);
       lookup.onsuccess = () => {
         const job = lookup.result as Job | undefined;
-        if ((!job || isTerminal(job.stage)) && typeof cursor.primaryKey === 'string' && cursor.value instanceof Blob) {
+        if (canClean(job) && typeof cursor.primaryKey === 'string' && cursor.value instanceof Blob) {
           summary.ids.push(cursor.primaryKey); summary.bytes += cursor.value.size;
         }
         cursor.continue();
@@ -69,7 +87,7 @@ export async function getCacheSummary(): Promise<CacheSummary> {
     transaction.onerror = () => reject(transaction.error);
   });
 }
-export async function clearStoredItems(ids: string[], mode: 'cache' | 'history'): Promise<CacheSummary> {
+export async function clearStoredItems(ids: string[], mode: 'cache' | 'history', activeIds: string[] = []): Promise<CacheSummary> {
   if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string') || !['cache', 'history'].includes(mode)) throw new TaskError('invalidSettings');
   const database = await db();
   return new Promise((resolve, reject) => {
@@ -80,10 +98,11 @@ export async function clearStoredItems(ids: string[], mode: 'cache' | 'history')
     // The caller supplies the reviewed IDs, so a new result created while a confirmation
     // is open cannot be swept into that earlier cleanup request.
     for (const id of new Set(ids)) {
+      if (activeIds.includes(id)) continue;
       const lookup = jobs.get(id);
       lookup.onsuccess = () => {
         const job = lookup.result as Job | undefined;
-        if (job && !isTerminal(job.stage)) return;
+        if (!canClean(job)) return;
         const file = results.get(id);
         file.onsuccess = () => {
           // A second panel may already have cleared the same reviewed snapshot.

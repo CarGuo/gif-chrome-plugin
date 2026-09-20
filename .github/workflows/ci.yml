@@ -70,6 +70,8 @@ jobs:
         run: npm run test:history
       - name: Result selection, batch downloads and filename tests
         run: npm run test:results
+      - name: Corrupt history, worker timeout and queue recovery tests
+        run: npm run test:reliability
       - name: Video context menu tests
         run: npm run test:context-menu
       - name: Package extension

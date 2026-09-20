@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { defaultSegment, DEFAULT_SETTINGS, DROP_FRAME_MODES, editSegment, errorCode, hasResult, httpOrigin, isTerminal, outputDuration, POLICY, prepareSegment, rpc, TaskError, validateOutputName, validateSettings, type CacheSummary, type DownloadBatchResult, type DropFrames, type ExportSettings, type Job, type MediaSource, type Segment } from '../shared/model';
+import { defaultSegment, DEFAULT_SETTINGS, DROP_FRAME_MODES, editSegment, errorCode, hasResult, httpOrigin, isTerminal, outputDuration, POLICY, prepareSegment, rpc, TaskError, validateOutputName, validateSettings, type CacheSummary, type DownloadBatchResult, type DropFrames, type ExportSettings, type HistoryProblem, type HistorySnapshot, type Job, type MediaSource, type Segment } from '../shared/model';
 import { makeFilename } from '../shared/filename';
 import { initializeClips, withImageMetadata } from '../shared/sources';
 import { mediaOrigins } from '../shared/acquisition';
@@ -21,6 +21,7 @@ function App() {
   const [settings, setSettings] = useState<ExportSettings>(DEFAULT_SETTINGS);
   const [settingsReady, setSettingsReady] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [historyProblems, setHistoryProblems] = useState<HistoryProblem[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ url: string; job: Job } | null>(null);
@@ -37,7 +38,10 @@ function App() {
     setSelected(previous => Object.fromEntries(next.filter(s => previous[s.id] || s.selected || next.length === 1).map(s => [s.id,
       initializeClips(previous[s.id], s)])));
   }
-  async function refreshJobs() { setJobs(await rpc<Job[]>({ target: 'background', type: 'list' })); }
+  async function refreshJobs() {
+    const history = await rpc<HistorySnapshot>({ target: 'background', type: 'history' });
+    setJobs(history.jobs); setHistoryProblems(history.problems);
+  }
   useEffect(() => {
     void rpc<ExportSettings>({ target: 'background', type: 'load-preferences' }).then(values => {
       setSettings(values); setSettingsReady(true);
@@ -54,7 +58,10 @@ function App() {
       if (message.type === 'job-updated') setJobs(previous => [message.job, ...previous.filter(j => j.id !== message.job.id)].sort((a, b) => b.createdAt - a.createdAt));
       if (message.type === 'jobs-removed' || message.type === 'cache-cleared') {
         previewRequest.current++;
-        if (message.type === 'jobs-removed') setJobs(previous => previous.filter(job => !message.ids.includes(job.id)));
+        if (message.type === 'jobs-removed') {
+          setJobs(previous => previous.filter(job => !message.ids.includes(job.id)));
+          setHistoryProblems(previous => previous.filter(problem => !message.ids.includes(problem.id)));
+        }
         else void refreshJobs().catch(error => setNotice(errorText(errorCode(error))));
         setPreview(previous => previous && message.ids.includes(previous.job.id) ? null : previous);
       }
@@ -64,7 +71,7 @@ function App() {
   }, []);
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url); }, [preview]);
   const history = jobs.filter(job => isTerminal(job.stage));
-  const historyRevision = history.map(job => `${job.id}:${job.updatedAt}`).join(',');
+  const historyRevision = history.map(job => `${job.id}:${job.updatedAt}`).join(',') + historyProblems.map(problem => problem.id).join(',');
   useEffect(() => {
     if (view !== 'history') return;
     let mounted = true;
@@ -158,6 +165,9 @@ function App() {
   }
   const shownJobs = view === 'create' ? jobs : history.filter(job => (historyFilter === 'all' || job.stage === historyFilter) &&
     `${jobName(job)} ${job.source.mediaPageUrl ?? job.source.pageUrl}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const shownProblems = view === 'history' && ['all', 'failed'].includes(historyFilter) ? historyProblems.filter(problem =>
+    `${problem.title ?? ''} ${problem.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) : [];
+  const resultCount = shownJobs.length + shownProblems.length;
   const ready = shownJobs.filter(hasResult);
   const readyRevision = ready.map(job => job.id).sort().join(',');
   const selectedReady = ready.filter(job => selectedJobs.has(job.id));
@@ -171,12 +181,15 @@ function App() {
     });
   }, [readyRevision]);
   async function downloadMany(items: Job[]) {
-    const selection = items.map(job => ({ id: job.id, title: validateOutputName(jobName(job)) }));
+    const selection = items.map(job => ({ id: job.id, title: jobName(job) }));
     const result = await rpc<DownloadBatchResult>({ target: 'background', type: 'download-many', items: selection });
     const started = new Set(result.started.map(item => item.id));
     setSelectedJobs(previous => new Set([...previous].filter(id => !started.has(id))));
     setNotice(result.failed.length
-      ? t('batchSavePartial', [number(result.started.length, 0), number(result.failed.length, 0), [...new Set(result.failed.map(item => errorText(item.error)))].join(' ')])
+      ? t('batchSavePartial', [number(result.started.length, 0), number(result.failed.length, 0), result.failed.map(item => {
+        const job = items.find(job => job.id === item.id)!;
+        return t('saveItemFailed', [jobName(job).trim() || job.source.title, errorText(item.error)]);
+      }).join('\n')])
       : t('downloadsStarted', number(result.started.length, 0)));
   }
   async function confirmCleanup() {
@@ -189,7 +202,8 @@ function App() {
   return <main>
     <header className="brand"><div className="brand-icon"><span>G</span><i /></div><div><strong>Gif Toolkit<span className="version">{chrome.runtime.getManifest().version}</span></strong><p>{t('tagline')}</p></div><span className="local-badge"><i />{t('localBadge')}</span></header>
     <nav className="view-nav" aria-label={t('navigation')}><button aria-pressed={view === 'create'} onClick={() => setView('create')}>{t('createView')}</button>
-      <button aria-pressed={view === 'history'} onClick={() => setView('history')}>{t('historyTitle')}<span>{history.length}</span></button></nav>
+      <button aria-pressed={view === 'history'} onClick={() => setView('history')}>{t('historyTitle')}<span>{history.length + historyProblems.length}</span></button></nav>
+    {!!historyProblems.length && view === 'create' && <div className="notice"><span>{t('historyProblemsHint')}</span><button onClick={() => setView('history')}>{t('historyTitle')}</button></div>}
     {notice && <div role="alert" className="notice"><span>{notice}</span><button aria-label={t('closePreview')} onClick={() => setNotice(null)}>×</button></div>}
     <div hidden={view !== 'create'}>
     <section className="intro"><div><h1>{t('sourcesTitle')}</h1><p>{t('sourcesHint')}</p></div><button className="icon-button refresh" disabled={!!busy} onClick={() => void perform(async () => { acceptSources(await rpc<MediaSource[]>({ target: 'background', type: 'scan' })); }, 'scan')} aria-label={t('refresh')} title={t('refresh')}>↻</button></section>
@@ -263,16 +277,23 @@ function App() {
         <label>{t('historyStatus')}<select value={historyFilter} onChange={event => setHistoryFilter(event.target.value)}>
           <option value="all">{t('historyAll')}</option>{(['completed', 'failed', 'cancelled'] as const).map(stage => <option key={stage} value={stage}>{stageText(stage)}</option>)}
         </select></label></div>
-      <div className="history-actions"><span>{t('historyCount', number(shownJobs.length, 0))}</span><button disabled={!!busy || !history.length} onClick={() => setCleanup({ kind: 'history', ids: history.map(job => job.id), bytes: cache?.bytes ?? 0 })}>{t('clearHistory')}</button></div>
+      <div className="history-actions"><span>{t('historyCount', number(resultCount, 0))}</span><button disabled={!!busy || !(history.length + historyProblems.length)} onClick={() => setCleanup({ kind: 'history', ids: [...history.map(job => job.id), ...historyProblems.map(problem => problem.id)], bytes: cache?.bytes ?? 0 })}>{t('clearHistory')}</button></div>
     </section>}
-    <section className="results"><div className="section-title"><h2 id="results-heading">{t(view === 'history' ? 'historyResults' : 'tasksTitle')}<span className="result-count">{shownJobs.length}</span></h2>{ready.length > 1 && <button className="text-button" disabled={!!busy} onClick={() => void perform(() => downloadMany(ready), 'download-many')}>{t('downloadAll')}</button>}</div>{view === 'create' && <p className="fine-print">{t('tasksHint')}</p>}
+    <section className="results"><div className="section-title"><h2 id="results-heading">{t(view === 'history' ? 'historyResults' : 'tasksTitle')}<span className="result-count">{resultCount}</span></h2>{ready.length > 1 && <button className="text-button" disabled={!!busy} onClick={() => void perform(() => downloadMany(ready), 'download-many')}>{t('downloadAll')}</button>}</div>{view === 'create' && <p className="fine-print">{t('tasksHint')}</p>}
       {!!ready.length && <div className="result-selection" role="group" aria-label={t('resultSelection')}>
         <button className="text-button" disabled={!!busy} onClick={() => setSelectedJobs(selectedReady.length === ready.length ? new Set() : new Set(ready.map(job => job.id)))}>{t(selectedReady.length === ready.length ? 'clearSelection' : 'selectAllResults')}</button>
         <span aria-live="polite">{t('selectedResults', number(selectedReady.length, 0))}</span>
         <button className="save" disabled={!!busy || !selectedReady.length} onClick={() => void perform(() => downloadMany(selectedReady), 'download-many')}>{t(busy === 'download-many' ? 'savingResults' : 'downloadSelected')}</button>
       </div>}
       <div className="result-list" role="region" aria-labelledby="results-heading" tabIndex={0}>
-      {!shownJobs.length && <div className="tasks-empty">{t(view === 'history' ? history.length ? 'historyNoMatches' : 'historyEmpty' : 'tasksEmpty')}</div>}
+      {!resultCount && <div className="tasks-empty">{t(view === 'history' ? history.length + historyProblems.length ? 'historyNoMatches' : 'historyEmpty' : 'tasksEmpty')}</div>}
+      {shownProblems.map(problem => <article key={problem.id} className="job failed" data-history-problem={problem.id}>
+        <strong>{problem.title || t('invalidHistoryTitle')}</strong><p className="job-error">{errorText('invalidHistory')}</p>
+        {problem.createdAt !== undefined && <p className="fine-print">{dateTime(problem.createdAt)}</p>}
+        <div className="job-actions"><button disabled={!!busy} className="delete" onClick={() => void perform(async () => {
+          await rpc({ target: 'background', type: 'delete', id: problem.id }); await refreshJobs();
+        }, 'delete')}>{t('delete')}</button></div>
+      </article>)}
       {shownJobs.map(job => <article key={job.id} className={`job ${job.stage}`} data-job-id={job.id} data-stage={job.stage}>
         <div className="job-top">{hasResult(job) ? <input className="job-select" type="checkbox" aria-label={t('selectResult', jobName(job))} checked={selectedJobs.has(job.id)} disabled={!!busy} onChange={event => {
           const checked = event.target.checked;
@@ -292,7 +313,7 @@ function App() {
     </section>
     <footer>{t('footer')}</footer>
     {cleanup && <CleanupDialog request={cleanup} onCancel={() => setCleanup(null)} onConfirm={() => void perform(confirmCleanup, 'cleanup')} />}
-    {preview && <div className="modal-backdrop" onClick={() => setPreview(null)}><section className="preview-modal" role="dialog" aria-modal="true" aria-label={t('preview')} onClick={event => event.stopPropagation()}><button className="preview-close" onClick={() => setPreview(null)} aria-label={t('closePreview')}>×</button><div className="checker"><img src={preview.url} alt={jobName(preview.job)} /></div><p>{preview.job.result?.width} × {preview.job.result?.height} · {number((preview.job.result?.bytes ?? 0) / 1_000_000)} MB</p><button className="save" onClick={() => void perform(() => download(preview.job, true))}>{t('download')}</button></section></div>}
+    {preview && <div className="modal-backdrop" onClick={() => setPreview(null)}><section className="preview-modal" role="dialog" aria-modal="true" aria-label={t('preview')} onClick={event => event.stopPropagation()}><button className="preview-close" onClick={() => setPreview(null)} aria-label={t('closePreview')}>×</button><div className="checker"><img src={preview.url} alt={jobName(preview.job)} /></div><p>{preview.job.result?.width} × {preview.job.result?.height} · {number((preview.job.result?.bytes ?? 0) / 1_000_000)} MB</p><button className="save" disabled={!!busy} onClick={() => void perform(() => download(preview.job, true), 'download')}>{t('download')}</button></section></div>}
   </main>;
 }
 document.documentElement.lang = chrome.i18n.getUILanguage();

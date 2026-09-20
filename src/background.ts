@@ -1,4 +1,5 @@
-import { errorCode, hasResult, httpOrigin, isTerminal, POLICY, prepareSegment, TaskError, validateOutputName, validateSettings, type DownloadBatchResult, type DownloadSelection, type Job, type MediaSource, type Reply } from './shared/model';
+import { errorCode, hasResult, httpOrigin, isTerminal, POLICY, prepareSegment, TaskError, validateOutputName, validateSettings, type DownloadBatchResult, type Job, type MediaSource, type Reply } from './shared/model';
+import { parseDownloadSelection } from './shared/download-selection';
 import { distinctSourceTitles, retainImageMetadata, sameSource, withImageMetadata } from './shared/sources';
 import { getJob, renameResult } from './shared/storage';
 import { loadPreferences, savePreferences } from './shared/preferences';
@@ -35,9 +36,11 @@ async function downloadResult(id: string, title?: string, saveAs = false): Promi
   }
   const url = await processor<string>('result-url', { id: job.id });
   try {
-    const downloadId = await chrome.downloads.download({ url, filename: `GifToolkit/${job.result!.filename}`, saveAs, conflictAction: 'uniquify' });
+    const downloadId = await chrome.downloads.download({ url, filename: `GifToolkit/${job.result!.filename}`, saveAs, conflictAction: 'uniquify' })
+      .catch(() => { console.warn('GIF save rejected', { id, phase: 'download-start', code: 'saveFailed' }); throw new TaskError('saveFailed'); });
     const [item] = await chrome.downloads.search({ id: downloadId });
     if (!item || item.state !== 'in_progress') await processor('release-result-url', { url });
+    if (item?.state === 'interrupted') throw new TaskError(item.error === 'USER_CANCELED' ? 'cancelled' : 'saveFailed');
     return downloadId;
   } catch (error) {
     await processor('release-result-url', { url }); throw error;
@@ -127,6 +130,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return scan(tabId, message.focus);
       }
       case 'list': return processor('list');
+      case 'history': return processor('history');
       case 'cache-summary': return processor('cache-summary');
       case 'clear-cache': return processor('clear-cache', { ids: message.ids });
       case 'clear-history': return processor('clear-history', { ids: message.ids });
@@ -144,10 +148,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return processor('enqueue', { jobs });
       }
       case 'cancel': return processor('cancel', { id: message.id });
-      case 'delete': {
-        const job = await getJob(message.id); if (job && !isTerminal(job.stage)) throw new TaskError('playerBusy');
-        return processor('delete', { id: message.id });
-      }
+      case 'delete': return processor('delete', { id: message.id });
       case 'inspect-image': {
         const meta = await processor<Parameters<typeof withImageMetadata>[1]>('inspect-image', { source: message.source });
         const saved = await chrome.storage.session.get('sources');
@@ -179,15 +180,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'download-many': {
         // v0.1.10: one immutable selection belongs to the background, so closing or
         // filtering the panel cannot change which files are handed to Chrome.
-        if (!Array.isArray(message.items) || !message.items.length || message.items.length > POLICY.historyCount) throw new TaskError('invalidSettings');
-        const items: DownloadSelection[] = message.items.map((item: DownloadSelection) => {
-          if (typeof item?.id !== 'string' || !item.id) throw new TaskError('invalidSettings');
-          return { id: item.id, title: validateOutputName(item.title) };
-        });
-        if (new Set(items.map(item => item.id)).size !== items.length) throw new TaskError('invalidSettings');
+        const items = parseDownloadSelection(message.items);
         const result: DownloadBatchResult = { started: [], failed: [] };
         for (const item of items) {
-          try { result.started.push({ id: item.id, downloadId: await downloadResult(item.id, item.title) }); }
+          try { result.started.push({ id: item.id, downloadId: await downloadResult(item.id, validateOutputName(item.title)) }); }
           catch (error) { result.failed.push({ id: item.id, error: errorCode(error) }); }
         }
         return result;
