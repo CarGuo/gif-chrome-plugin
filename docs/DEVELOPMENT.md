@@ -44,7 +44,7 @@ npx playwright install chromium
 
 流程为版本检查 → `npm ci` → `check` → 安装 Chromium / 系统依赖 → `test:transports` → `test:e2e` → `test:download` → `test:drop-frames` → `test:preferences` → `test:history` → `test:results` → `test:context-menu` → 三个发行附件的打包与校验。下载测试依赖前面的真实 GIF 成品，不能单独提前或并行运行。任何一步失败都会阻止发布；可用的测试 JSON / PNG 保留 7 天。真实登录态 X 和联网 YouTube 验收仍按发布指南手工执行。
 
-只有 tag 推送在检查成功后进入独立发布作业，该作业取得 `contents: write`，其余作业仅有读取权限。手动运行 CI 不发布。完整发布、重跑和预览版规则见 [发布指南](RELEASING.md)。
+只有 tag 推送在检查成功后进入独立发布作业，该作业取得 `contents: write`，其余作业仅有读取权限。手动运行 CI 不发布；版本 tag 均发布正式 Release。完整发布和重跑规则见 [发布指南](RELEASING.md)。
 
 ## 模块
 

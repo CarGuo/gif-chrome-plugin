@@ -4,7 +4,7 @@
 
 ## 发布边界
 
-当前 v0.1.x 是开发者模式安装的预览版。GitHub Release 不等同于 Chrome Web Store 上架，也不表示所有视频平台均已验收。保留 README 的验证矩阵，不能将结构模拟测试描述为真实登录态测试。
+版本 tag 发布正式 GitHub Release，包括 v0.x；扩展通过开发者模式安装。GitHub Release 不等同于 Chrome Web Store 上架，也不表示所有视频平台均已验收。保留 README 的验证矩阵，不能将结构模拟测试描述为真实登录态测试。
 
 开发者日常构建不需要凭据。维护者推送使用已有 SSH 配置；自动发布使用 GitHub Actions 自带的 `GITHUB_TOKEN`，无需添加个人 token、Secrets 或上传 `.env`。工作流仅在发布作业声明 `contents: write`，其余检查作业只有读取权限。仓库或组织策略需要允许 Actions、工作流引用的官方 Actions 及该写权限。不要把凭据写入代码、命令参数、Git 远程 URL 或发布附件。
 
@@ -59,7 +59,7 @@ npm run release:verify
 
 ### 推送 tag 自动发布
 
-[CI and Release](../.github/workflows/ci.yml) 会在推送 `v*` tag 时自动执行完整测试、打包与发布。版本必须是 `major.minor.patch` 三段数字，tag 必须严格等于 `v` + `package.json.version`，并与 `package-lock.json` 两处版本一致；不一致立即失败。`0.x` 自动标记 **pre-release**，`1.0.0` 起为正式 Release。Chrome 清单不接受 `-beta` 一类后缀，因此预览状态通过 Release 属性表示。
+[CI and Release](../.github/workflows/ci.yml) 会在推送 `v*` tag 时自动执行完整测试、打包与发布。版本必须是 `major.minor.patch` 三段数字，tag 必须严格等于 `v` + `package.json.version`，并与 `package-lock.json` 两处版本一致；不一致立即失败。所有符合该规则的 tag 均发布正式 Release，不根据主版本号推断预发布状态。v0.1.11 修正了旧工作流将所有 0.x 自动标为 prerelease 的规则。
 
 以下以 **0.1.9** 为例；实际发布使用尚未存在的版本 tag。发布前须先完成该版本的实际变更、文档和验收，不要仅为触发 CI 空升版本：
 
@@ -95,7 +95,7 @@ PR / `main` 提交会执行相同的验证和打包，但不会发布。Actions 
 - tag 版本错误或代码错误：在新提交修正并使用新版本 tag，不强制移动已发布标签。发行作业的中间附件保留 7 天，过期后需重新运行全部作业。
 - 若 GitHub 策略阻止 Actions 或写权限，先在仓库 / 组织设置解决限制；个人 `.env` 无法替代工作流权限。
 
-需要手动发布已有旧 tag 时，仍可在 GitHub 创建草稿，粘贴对应的版本说明、上传本地生成并校验的三个附件，然后发布。0.x 记得选择 **pre-release**。仓库本身可见性保持不变。
+需要手动发布已有旧 tag 时，仍可在 GitHub 创建草稿，粘贴对应的版本说明、上传本地生成并校验的三个附件，然后发布为正式 Release。仓库本身可见性保持不变。
 
 发布完成后再次查询远程标签、Release 状态、附件下载地址和仓库 About，确认都对应同一次提交。GitHub 自动生成的 Source code 是项目源码，不是可直接加载的扩展包；说明下载哪个 ZIP。
 

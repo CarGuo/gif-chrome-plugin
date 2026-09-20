@@ -6,7 +6,7 @@ A Chrome side panel extension for webpage videos, GIFs and WebP images. Select c
 
 [简体中文](README.md) · [Download v0.1.10](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.10) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/CarGuo/gif-chrome-plugin/issues)
 
-> **Current version: v0.1.10 preview, Chrome 148+ required.** Install in developer mode. The extension is not listed in the Chrome Web Store. See the verification table below for the remaining X and YouTube acceptance gaps.
+> **Published version: v0.1.10, Chrome 148+ required.** Install in developer mode. The extension is not listed in the Chrome Web Store. See the verification table below for the remaining X and YouTube acceptance gaps.
 
 ## Features
 
@@ -82,7 +82,7 @@ npm run test:drop-frames
 
 Load `dist/` in Chrome after building. Node.js 20.18+ is required. No `.env` or GitHub token is needed to build or use the extension.
 
-[CI and Release](https://github.com/CarGuo/gif-chrome-plugin/actions/workflows/ci.yml) runs type checks, unit/browser tests and package verification for PRs and `main`. Pushing a `vX.Y.Z` tag that matches the project version automatically publishes the extension ZIP, third-party source ZIP and SHA-256 checksums. Versions below 1.0 are marked as pre-releases; see the [release guide](docs/RELEASING.md).
+[CI and Release](https://github.com/CarGuo/gif-chrome-plugin/actions/workflows/ci.yml) runs type checks, unit/browser tests and package verification for PRs and `main`. Pushing a `vX.Y.Z` tag that matches the project version automatically publishes the extension ZIP, third-party source ZIP and SHA-256 checksums. Tags publish regular releases, including versions below 1.0; see the [release guide](docs/RELEASING.md).
 
 Further documentation: [User guide](docs/USER_GUIDE.md) · [Development](docs/DEVELOPMENT.md) · [Releasing](docs/RELEASING.md) · [0.1.7 media verification and remaining gaps](docs/MEDIA-0.1.7.md) (Chinese).
 

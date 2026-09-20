@@ -6,7 +6,7 @@ Chrome 侧栏扩展：右键选择网页视频、GIF 或 WebP，调整片段和�
 
 [English](README.en.md) · [下载 v0.1.10](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.10) · [使用指南](docs/USER_GUIDE.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/CarGuo/gif-chrome-plugin/issues)
 
-> **当前版本为 v0.1.10 预览版，要求 Chrome 148+。** 通过开发者模式安装，尚未上架 Chrome Web Store。普通网页视频、GIF / WebP 已经过端到端验证；X、YouTube 等平台的验证边界见下文。
+> **当前已发布版本为 v0.1.10，要求 Chrome 148+。** 通过开发者模式安装，尚未上架 Chrome Web Store。普通网页视频、GIF / WebP 已经过端到端验证；X、YouTube 等平台的验证边界见下文。
 
 ## 功能
 
@@ -105,7 +105,7 @@ npm run test:drop-frames
 
 加载构建生成的 `dist/`。本地开发、构建和使用扩展均**不需要 `.env` 或 GitHub token**。
 
-[CI and Release](https://github.com/CarGuo/gif-chrome-plugin/actions/workflows/ci.yml) 在 PR 和 `main` 提交时运行类型检查、单元/浏览器测试及打包校验。推送与项目版本一致的 `vX.Y.Z` tag 后，自动发布扩展 ZIP、第三方源码 ZIP 和 SHA-256；`0.x` 标记为预览版。操作步骤见 [发布指南](docs/RELEASING.md)。
+[CI and Release](https://github.com/CarGuo/gif-chrome-plugin/actions/workflows/ci.yml) 在 PR 和 `main` 提交时运行类型检查、单元/浏览器测试及打包校验。推送与项目版本一致的 `vX.Y.Z` tag 后，自动发布正式 Release，包含扩展 ZIP、第三方源码 ZIP 和 SHA-256；`0.x` 同样适用。操作步骤见 [发布指南](docs/RELEASING.md)。
 
 ## 文档
 

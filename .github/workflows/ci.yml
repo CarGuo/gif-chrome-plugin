@@ -22,7 +22,6 @@ jobs:
     timeout-minutes: 30
     outputs:
       version: ${{ steps.version.outputs.version }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,8 +47,8 @@ jobs:
           if (process.env.GITHUB_REF_TYPE === 'tag') {
             assert.equal(process.env.GITHUB_REF_NAME, `v${pkg.version}`, 'Tag must exactly match package.json.');
           }
-          // v0.1.5 CI: keep the existing 0.x preview policy without invalid manifest suffixes.
-          appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\nprerelease=${parts[0] === 0}\n`);
+          // v0.1.11: a version tag publishes a release, including 0.x versions.
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\n`);
           NODE
       - run: npm ci
       - name: Typecheck, unit tests and production build
@@ -129,7 +128,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_VERSION: ${{ needs.check.outputs.version }}
-          PRERELEASE: ${{ needs.check.outputs.prerelease }}
         run: |
           set -euo pipefail
           # Fail on API errors instead of treating permission/network failures as a missing release.
@@ -146,7 +144,7 @@ jobs:
             if [[ -f "$notes" ]]; then notes_args=(--notes-file "$notes"); fi
             gh release create "$RELEASE_TAG" --verify-tag --draft \
               --title "Gif Toolkit Chrome $RELEASE_TAG" \
-              --prerelease="$PRERELEASE" "${notes_args[@]}"
+              --prerelease=false "${notes_args[@]}"
           elif [[ -f "$notes" ]]; then
             gh release edit "$RELEASE_TAG" --notes-file "$notes"
           fi
@@ -165,5 +163,5 @@ jobs:
             --pattern SHA256SUMS.txt
           cmp artifacts/SHA256SUMS.txt "$verify_dir/SHA256SUMS.txt"
           (cd "$verify_dir" && sha256sum --check --strict SHA256SUMS.txt)
-          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$PRERELEASE"
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
           gh release view "$RELEASE_TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
