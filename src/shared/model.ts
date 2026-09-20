@@ -39,6 +39,8 @@ export interface Job {
 }
 export const hasResult = (job: Job) => job.stage === 'completed' && !!job.result && job.result.clearedAt === undefined;
 export interface CacheSummary { ids: string[]; bytes: number }
+export interface DownloadSelection { id: string; title: string }
+export interface DownloadBatchResult { started: { id: string; downloadId: number }[]; failed: { id: string; error: ErrorCode }[] }
 export type ErrorCode = 'mediaDiscoveryRequired' | 'ambiguousMedia' | 'invalidName' | 'invalidSettings' | 'invalidSegment' | 'sourceGone' | 'sourceChanged' | 'sourceNotReady' | 'protectedMedia' | 'crossOriginPixels' | 'seekFailed' | 'inputTooLarge' | 'tooManyFrames' | 'downloadFailed' | 'permissionRequired' | 'unsupportedImage' | 'unsupportedVideo' | 'encodingFailed' | 'budgetUnreachable' | 'cancelled' | 'interrupted' | 'invalidOutput' | 'resultUnavailable' | 'noMedia' | 'playerBusy' | 'pageUnavailable' | 'storageFull';
 export class TaskError extends Error {
   constructor(public code: ErrorCode, message?: string) { super(message ?? code); }

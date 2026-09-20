@@ -27,6 +27,7 @@ npx playwright install chromium
 | `npm run test:drop-frames` | 丢帧 UI 到成品；独立检查颜色、帧数、延时、透明与超限再压缩 |
 | `npm run test:preferences` | 旧 12→10 迁移、自选值保留、命名、历史界面同步 |
 | `npm run test:history` | 历史查询、真实 IndexedDB 清理、跨面板预览释放、下载保留、并发任务及浏览器重启 |
+| `npm run test:results` | 四视频命名、结果独立滚动、勾选保存、实际磁盘文件与关闭面板后的批量保存；`TEST_BROWSER=chrome` 使用本机 Chrome 独立配置 |
 | `npm run test:context-menu` | 媒体、遮罩、普通控件、Alt 和刷新后的右键行为 |
 | `npm run test:download` | 浏览器默认下载及实际文件名 / 字节验证 |
 | `npm run test:transports` | HLS TS / fMP4、DASH、文件 Blob 全下载转换与零页面拖动 |
@@ -41,7 +42,7 @@ npx playwright install chromium
 
 [工作流](../.github/workflows/ci.yml) 在 PR、`main` 推送和 `v*` tag 推送时运行，也可从 Actions 手动运行检查。使用 Ubuntu 24.04、Node.js 22 和锁定依赖对应的 Playwright Chromium；测试走已有的 `channel: chromium` 无头扩展路径。
 
-流程为版本检查 → `npm ci` → `check` → 安装 Chromium / 系统依赖 → `test:e2e` → `test:download` → `test:drop-frames` → `test:preferences` → `test:context-menu` → 三个发行附件的打包与校验。下载测试依赖前面的真实 GIF 成品，不能单独提前或并行运行。任何一步失败都会阻止发布；可用的测试 JSON / PNG 保留 7 天。真实登录态 X 和联网 YouTube 验收仍按发布指南手工执行。
+流程为版本检查 → `npm ci` → `check` → 安装 Chromium / 系统依赖 → `test:transports` → `test:e2e` → `test:download` → `test:drop-frames` → `test:preferences` → `test:history` → `test:results` → `test:context-menu` → 三个发行附件的打包与校验。下载测试依赖前面的真实 GIF 成品，不能单独提前或并行运行。任何一步失败都会阻止发布；可用的测试 JSON / PNG 保留 7 天。真实登录态 X 和联网 YouTube 验收仍按发布指南手工执行。
 
 只有 tag 推送在检查成功后进入独立发布作业，该作业取得 `contents: write`，其余作业仅有读取权限。手动运行 CI 不发布。完整发布、重跑和预览版规则见 [发布指南](RELEASING.md)。
 
@@ -105,6 +106,7 @@ flowchart TD
 11. `Segment.endMode = source` 表示直到下载文件结尾，`end` 在下载前只是预览值；`time` 表示固定结束秒数。实际处理必须使用文件元数据解析完整选区并检查帧数，不能直接校验网页估计时长，也不能钳制用户指定的范围。
 12. 多档下载共用 `chooseVideoSize`：最长边不超过上限的最大档；全部超限才取最小原档。不得用页面尺寸或原始上传尺寸冒充具体档位尺寸，不得默认挑最高码率。
 13. 清理区分 GIF 文件与任务记录；`result.clearedAt` 表示文件不再保留，历史指标仍有效。删除及标记用跨 `jobs/results` 的单个事务，只处理确认的 ID 并重新检查终态。下载 URL 由每次下载独立持有，不能随历史删除提前撤销。
+14. 重复默认名称在完整扫描合并后统一编号，不影响来源身份和用户改名。批量保存提交任务 ID / 名称快照，由后台逐项读取文件；选择不可绑定列表下标，面板关闭也不可中断已提交批次。
 
 ## 贡献和剩余工作
 

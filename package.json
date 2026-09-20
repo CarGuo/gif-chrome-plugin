@@ -1,6 +1,6 @@
 {
   "name": "gif-toolkit-chrome",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "type": "module",
   "description": "Turn selected webpage video and animated images into size-limited GIFs, locally.",
@@ -32,7 +32,8 @@
     "check": "npm run typecheck && npm test && npm run build",
     "test:transports": "node scripts/transports.mjs",
     "test:vimeo": "TEST_PLATFORM=vimeo node scripts/platform-smoke.mjs",
-    "test:history": "node scripts/history.mjs"
+    "test:history": "node scripts/history.mjs",
+    "test:results": "node scripts/results.mjs"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.15.0",

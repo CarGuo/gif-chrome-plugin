@@ -1,6 +1,6 @@
 # 隐私与权限 / Privacy and permissions
 
-适用版本 / Version: **0.1.9** · 更新日期 / Updated: **2026-09-17**
+适用版本 / Version: **0.1.10** · 更新日期 / Updated: **2026-09-20**
 
 ## 数据处理
 

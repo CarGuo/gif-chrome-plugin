@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { defaultSegment, DEFAULT_SETTINGS, DROP_FRAME_MODES, editSegment, errorCode, hasResult, httpOrigin, isTerminal, outputDuration, POLICY, prepareSegment, rpc, TaskError, validateOutputName, validateSettings, type CacheSummary, type DropFrames, type ExportSettings, type Job, type MediaSource, type Segment } from '../shared/model';
+import { defaultSegment, DEFAULT_SETTINGS, DROP_FRAME_MODES, editSegment, errorCode, hasResult, httpOrigin, isTerminal, outputDuration, POLICY, prepareSegment, rpc, TaskError, validateOutputName, validateSettings, type CacheSummary, type DownloadBatchResult, type DropFrames, type ExportSettings, type Job, type MediaSource, type Segment } from '../shared/model';
 import { makeFilename } from '../shared/filename';
 import { initializeClips, withImageMetadata } from '../shared/sources';
 import { mediaOrigins } from '../shared/acquisition';
@@ -16,6 +16,7 @@ function App() {
   const [missingFrameOrigins, setMissingFrameOrigins] = useState<string[]>([]);
   const [sourceNames, setSourceNames] = useState<Record<string, string>>({});
   const [jobNames, setJobNames] = useState<Record<string, string>>({});
+  const [selectedJobs, setSelectedJobs] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Record<string, Segment[]>>({});
   const [settings, setSettings] = useState<ExportSettings>(DEFAULT_SETTINGS);
   const [settingsReady, setSettingsReady] = useState(false);
@@ -158,6 +159,26 @@ function App() {
   const shownJobs = view === 'create' ? jobs : history.filter(job => (historyFilter === 'all' || job.stage === historyFilter) &&
     `${jobName(job)} ${job.source.mediaPageUrl ?? job.source.pageUrl}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const ready = shownJobs.filter(hasResult);
+  const readyRevision = ready.map(job => job.id).sort().join(',');
+  const selectedReady = ready.filter(job => selectedJobs.has(job.id));
+  useEffect(() => {
+    // v0.1.10: selection follows task IDs, never row positions. Hidden, deleted or
+    // cleared results leave the selection instead of being saved from another view.
+    const available = new Set(ready.map(job => job.id));
+    setSelectedJobs(previous => {
+      const next = new Set([...previous].filter(id => available.has(id)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [readyRevision]);
+  async function downloadMany(items: Job[]) {
+    const selection = items.map(job => ({ id: job.id, title: validateOutputName(jobName(job)) }));
+    const result = await rpc<DownloadBatchResult>({ target: 'background', type: 'download-many', items: selection });
+    const started = new Set(result.started.map(item => item.id));
+    setSelectedJobs(previous => new Set([...previous].filter(id => !started.has(id))));
+    setNotice(result.failed.length
+      ? t('batchSavePartial', [number(result.started.length, 0), number(result.failed.length, 0), [...new Set(result.failed.map(item => errorText(item.error)))].join(' ')])
+      : t('downloadsStarted', number(result.started.length, 0)));
+  }
   async function confirmCleanup() {
     const request = cleanup!; setCleanup(null);
     const result = await rpc<CacheSummary>({ target: 'background', type: request.kind === 'cache' ? 'clear-cache' : 'clear-history', ids: request.ids });
@@ -244,20 +265,30 @@ function App() {
         </select></label></div>
       <div className="history-actions"><span>{t('historyCount', number(shownJobs.length, 0))}</span><button disabled={!!busy || !history.length} onClick={() => setCleanup({ kind: 'history', ids: history.map(job => job.id), bytes: cache?.bytes ?? 0 })}>{t('clearHistory')}</button></div>
     </section>}
-    <section className="results"><div className="section-title"><h2>{t(view === 'history' ? 'historyResults' : 'tasksTitle')}<span className="result-count">{shownJobs.length}</span></h2>{ready.length > 1 && <button className="text-button" onClick={() => void perform(async () => { for (const job of ready) await download(job, false); })}>{t('downloadAll')}</button>}</div>{view === 'create' && <p className="fine-print">{t('tasksHint')}</p>}
+    <section className="results"><div className="section-title"><h2 id="results-heading">{t(view === 'history' ? 'historyResults' : 'tasksTitle')}<span className="result-count">{shownJobs.length}</span></h2>{ready.length > 1 && <button className="text-button" disabled={!!busy} onClick={() => void perform(() => downloadMany(ready), 'download-many')}>{t('downloadAll')}</button>}</div>{view === 'create' && <p className="fine-print">{t('tasksHint')}</p>}
+      {!!ready.length && <div className="result-selection" role="group" aria-label={t('resultSelection')}>
+        <button className="text-button" disabled={!!busy} onClick={() => setSelectedJobs(selectedReady.length === ready.length ? new Set() : new Set(ready.map(job => job.id)))}>{t(selectedReady.length === ready.length ? 'clearSelection' : 'selectAllResults')}</button>
+        <span aria-live="polite">{t('selectedResults', number(selectedReady.length, 0))}</span>
+        <button className="save" disabled={!!busy || !selectedReady.length} onClick={() => void perform(() => downloadMany(selectedReady), 'download-many')}>{t(busy === 'download-many' ? 'savingResults' : 'downloadSelected')}</button>
+      </div>}
+      <div className="result-list" role="region" aria-labelledby="results-heading" tabIndex={0}>
       {!shownJobs.length && <div className="tasks-empty">{t(view === 'history' ? history.length ? 'historyNoMatches' : 'historyEmpty' : 'tasksEmpty')}</div>}
       {shownJobs.map(job => <article key={job.id} className={`job ${job.stage}`} data-job-id={job.id} data-stage={job.stage}>
-        <div className="job-top"><span className="job-symbol">{job.stage === 'completed' ? '✓' : job.stage === 'failed' ? '!' : '◷'}</span><div><strong>{jobName(job)}</strong><p>{time(job.segment.start)}–{time(job.segment.end)} · {number(job.settings.speed)}{t('speedUnit')}</p></div><span className="job-status">{job.result?.clearedAt !== undefined ? t('fileCleared') : stageText(job.stage)}</span></div>
+        <div className="job-top">{hasResult(job) ? <input className="job-select" type="checkbox" aria-label={t('selectResult', jobName(job))} checked={selectedJobs.has(job.id)} disabled={!!busy} onChange={event => {
+          const checked = event.target.checked;
+          setSelectedJobs(previous => { const next = new Set(previous); if (checked) next.add(job.id); else next.delete(job.id); return next; });
+        }} /> : <span className="job-symbol">{job.stage === 'completed' ? '✓' : job.stage === 'failed' ? '!' : '◷'}</span>}<div><strong title={jobName(job)}>{jobName(job)}</strong><p>{time(job.segment.start)}–{time(job.segment.end)} · {number(job.settings.speed)}{t('speedUnit')}</p></div><span className="job-status">{job.result?.clearedAt !== undefined ? t('fileCleared') : stageText(job.stage)}</span></div>
         {view === 'history' && <div className="history-origin"><time dateTime={new Date(job.createdAt).toISOString()}>{dateTime(job.createdAt)}</time><a href={job.source.mediaPageUrl ?? job.source.pageUrl} target="_blank" rel="noreferrer">{t('openSource')} ↗</a></div>}
         {!isTerminal(job.stage) && <><progress max={1} value={job.progress} /><div className="progress-detail"><span>{job.attempt ? t('attempt', String(job.attempt)) : stageText(job.stage)}</span><span>{Math.round(job.progress * 100)}%</span></div></>}
         {job.result && <div className="result-meta"><b>{number(job.result.bytes / 1_000_000)} MB</b><span>{job.result.width} × {job.result.height}</span><span>{t('clipDuration', number(job.result.duration))}</span></div>}
         {hasResult(job) && <><label className="output-name">{t('outputName')}<input type="text" maxLength={200} value={jobName(job)} onChange={event => setJobNames(previous => ({ ...previous, [job.id]: event.target.value }))} /></label><p className="filename-preview">{makeFilename(job, jobName(job))}</p></>}
         {job.result?.clearedAt !== undefined && <p className="fine-print cleared-note">{t('fileClearedHint')}</p>}
         {job.error && job.stage !== 'cancelled' && <p className="job-error">{errorText(job.error)}</p>}
-        <div className="job-actions">{hasResult(job) && <><button className="save" onClick={() => void perform(() => download(job, true))}>↓ {t('download')}</button><button onClick={() => void perform(() => showPreview(job))}>{t('preview')}</button></>}
+        <div className="job-actions">{hasResult(job) && <><button className="save" disabled={!!busy} onClick={() => void perform(() => download(job, true), 'download')}>↓ {t('download')}</button><button onClick={() => void perform(() => showPreview(job))}>{t('preview')}</button></>}
           {!isTerminal(job.stage) ? <button onClick={() => void perform(async () => { await rpc({ target: 'background', type: 'cancel', id: job.id }); await refreshJobs(); })}>{t('cancel')}</button> : <><button onClick={() => restoreJob(job)}>{t('editAgain')}</button><button className="delete" aria-label={t('delete')} title={t('delete')} onClick={() => void perform(async () => { await rpc({ target: 'background', type: 'delete', id: job.id }); await refreshJobs(); })}>×</button></>}
         </div>
       </article>)}
+      </div>
     </section>
     <footer>{t('footer')}</footer>
     {cleanup && <CleanupDialog request={cleanup} onCancel={() => setCleanup(null)} onConfirm={() => void perform(confirmCleanup, 'cleanup')} />}

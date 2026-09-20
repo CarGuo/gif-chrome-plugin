@@ -4,9 +4,9 @@
 
 A Chrome side panel extension for webpage videos, GIFs and WebP images. Select clips, adjust speed and export locally. Defaults: **4 MB · 800 px longest side · 10 fps**. No desktop application or conversion server required.
 
-[简体中文](README.md) · [Download v0.1.9](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.9) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/CarGuo/gif-chrome-plugin/issues)
+[简体中文](README.md) · [Download v0.1.10](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.10) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/CarGuo/gif-chrome-plugin/issues)
 
-> **Current version: v0.1.9 preview, Chrome 148+.** Install in developer mode. The extension is not listed in the Chrome Web Store. See the verification table below for the remaining X and YouTube acceptance gaps.
+> **Current version: v0.1.10 preview, Chrome 148+ required.** Install in developer mode. The extension is not listed in the Chrome Web Store. See the verification table below for the remaining X and YouTube acceptance gaps.
 
 ## Features
 
@@ -16,14 +16,14 @@ A Chrome side panel extension for webpage videos, GIFs and WebP images. Select c
 - A file-size budget and dimensions up to 800 px on both axes, preserving aspect ratio without enlarging small images.
 - Download the largest available representation within the size ceiling. Full-source selections end at the downloaded file's actual end, independently of the page player's estimated duration. See the [0.1.8 regression record](docs/DOWNLOAD-0.1.8.md) (Chinese).
 - Optional frame removal, **off by default**: merge consecutive identical frames or remove every 2nd, 3rd or 4th frame. The duration at the chosen speed is preserved.
-- Background queue, cancellation, local history, GIF preview, edit again and batch saving.
+- Background queue, cancellation, GIF preview and edit again. Results scroll in their own bounded list; save one GIF, selected GIFs or all available GIFs.
 - A dedicated History view with search, status filters, dates and source links. See GIF storage usage, clear cached files while keeping records, or delete history. Files already saved to your computer are unaffected.
-- Editable titles; Base64url filenames with a generation timestamp and unique task ID.
+- Editable titles with automatic numbering for duplicate media titles on a page; Base64url filenames with a generation timestamp and unique task ID.
 - English and Simplified Chinese UI, selected by Chrome's UI language.
 
 ## Install and update
 
-1. Download **`gif-toolkit-chrome-0.1.9.zip`** from the [release page](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.9) and extract it to a permanent folder.
+1. Download **`gif-toolkit-chrome-0.1.10.zip`** from the [release page](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.10) and extract it to a permanent folder.
 2. Open `chrome://extensions` and enable **Developer mode**.
 3. Click **Load unpacked** and select the extracted folder containing `manifest.json`.
 4. Pin Gif Toolkit to the toolbar.

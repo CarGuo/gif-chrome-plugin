@@ -69,6 +69,8 @@ jobs:
         run: npm run test:preferences
       - name: History, cache cleanup and persistence tests
         run: npm run test:history
+      - name: Result selection, batch downloads and filename tests
+        run: npm run test:results
       - name: Video context menu tests
         run: npm run test:context-menu
       - name: Package extension

@@ -26,6 +26,7 @@ npm run test:e2e
 npm run test:drop-frames
 npm run test:preferences
 npm run test:history
+npm run test:results
 npm run test:context-menu
 npm run test:download
 ```
@@ -78,7 +79,7 @@ tag 必须指向包含该工作流的提交。之前已经推送的 `v0.1.5` 不
 
 打开仓库 [Actions](https://github.com/CarGuo/gif-chrome-plugin/actions/workflows/ci.yml) 查看进度。顺序为：
 
-1. 校验版本，安装锁定依赖，运行类型检查、单元测试、生产构建及七组浏览器测试（媒体获取、端到端、下载、丢帧、偏好、历史清理、右键）。
+1. 校验版本，安装锁定依赖，运行类型检查、单元测试、生产构建及八组浏览器测试（媒体获取、端到端、下载、丢帧、偏好、历史清理、结果选择保存、右键）。
 2. 生成扩展 ZIP、固定来源的第三方源码 ZIP、`SHA256SUMS.txt`，运行 `release:verify`。
 3. 只把三个校验过的附件交给独立发布作业，再核对一次 SHA-256。
 4. 创建该 tag 的草稿 Release，优先使用 `docs/releases/<tag>.md`；没有该文件时使用 GitHub 自动生成的发布说明。

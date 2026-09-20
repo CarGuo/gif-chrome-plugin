@@ -1,10 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { makeFilename } from '../src/shared/filename';
 import { inspectGif } from '../src/shared/encoding';
-import { imageOrigins, initializeClips, retainImageMetadata } from '../src/shared/sources';
+import { distinctSourceTitles, imageOrigins, initializeClips, retainImageMetadata } from '../src/shared/sources';
 import type { MediaSource } from '../src/shared/model';
 
 const source: MediaSource = { id: 'source', documentKey: 'document', tabId: 1, frameId: 0, kind: 'gif', url: 'https://cdn.test/a.gif', pageUrl: 'https://page.test', title: '猫咪 / hello world 🐱', width: 120, height: 80, duration: null, currentTime: 0 };
+describe('v0.1.10 names for several media on one page', () => {
+  const numbered = (title: string, index: number) => `Media ${String(index).padStart(2, '0')} · ${title}`;
+  it('gives four same-title sources distinct names and Base64 prefixes before creating jobs', () => {
+    const items = Array.from({ length: 4 }, (_, index) => ({ ...source, id: String(index), title: '相同的网页标题'.repeat(30) }));
+    const named = distinctSourceTitles(items, numbered);
+    expect(new Set(named.map(item => item.title)).size).toBe(4);
+    expect(named.every(item => item.title.length <= 200)).toBe(true);
+    expect(new Set(named.map(item => makeFilename({ source: item, id: 'same-id', createdAt: 1000 }))).size).toBe(4);
+    expect(named.map(item => item.id)).toEqual(items.map(item => item.id));
+  });
+  it('preserves distinct titles and avoids collisions with existing numbered titles', () => {
+    const items = ['A', 'Media 01 · A', 'A', 'Named video'].map((title, i) => ({ ...source, id: String(i), title }));
+    expect(distinctSourceTitles(items, numbered).map(item => item.title)).toEqual(['Media 02 · A', 'Media 01 · A', 'Media 03 · A', 'Named video']);
+    expect(distinctSourceTitles(items, numbered)).toEqual(distinctSourceTitles(items, numbered));
+  });
+});
 describe('v0.1.4 filename contract', () => {
   const job = { source, id: 'abc12345-6789-4000-a123-0123456789ab', createdAt: 1789545600123 };
   it('encodes UTF-8 with filename-safe Base64 and includes the generation timestamp', () => {

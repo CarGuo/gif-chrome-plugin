@@ -26,3 +26,21 @@ export function initializeClips(clips: Segment[] | undefined, source: MediaSourc
 export function imageOrigins(sources: MediaSource[]): string[] {
   return [...new Set(sources.filter(s => s.kind !== 'video' && !s.url.startsWith('data:')).map(s => httpOrigin(s.url)))];
 }
+
+// v0.1.10: several players can inherit the same page title. Disambiguate at the
+// complete scan boundary (including frames), before names reach selection/jobs/files.
+export function distinctSourceTitles(sources: MediaSource[], numbered: (title: string, index: number) => string): MediaSource[] {
+  const key = (title: string) => title.normalize('NFC').trim();
+  const counts = new Map<string, number>();
+  for (const source of sources) counts.set(key(source.title), (counts.get(key(source.title)) ?? 0) + 1);
+  const used = new Set(sources.map(source => key(source.title)));
+  const indices = new Map<string, number>();
+  return sources.map(source => {
+    const titleKey = key(source.title);
+    if (counts.get(titleKey) === 1) return source;
+    let index = indices.get(titleKey) ?? 0, title: string;
+    do { title = numbered(source.title, ++index).slice(0, 200); } while (used.has(key(title)));
+    indices.set(titleKey, index); used.add(key(title));
+    return { ...source, title };
+  });
+}

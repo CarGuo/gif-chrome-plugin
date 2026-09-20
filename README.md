@@ -4,9 +4,9 @@
 
 Chrome 侧栏扩展：右键选择网页视频、GIF 或 WebP，调整片段和速度，在本机生成 GIF。默认 **4 MB · 最长边 800 px · 10 fps**，无需安装桌面软件或转码服务。
 
-[English](README.en.md) · [下载 v0.1.9](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.9) · [使用指南](docs/USER_GUIDE.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/CarGuo/gif-chrome-plugin/issues)
+[English](README.en.md) · [下载 v0.1.10](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.10) · [使用指南](docs/USER_GUIDE.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/CarGuo/gif-chrome-plugin/issues)
 
-> **当前版本为 v0.1.9 预览版，要求 Chrome 148+。** 通过开发者模式安装，尚未上架 Chrome Web Store。普通网页视频、GIF / WebP 已经过端到端验证；X、YouTube 等平台的验证边界见下文。
+> **当前版本为 v0.1.10 预览版，要求 Chrome 148+。** 通过开发者模式安装，尚未上架 Chrome Web Store。普通网页视频、GIF / WebP 已经过端到端验证；X、YouTube 等平台的验证边界见下文。
 
 ## 功能
 
@@ -16,9 +16,9 @@ Chrome 侧栏扩展：右键选择网页视频、GIF 或 WebP，调整片段和�
 - **控制大小**：1 / 2 / 4 MB 预设及自定义上限；宽高都不超过 800 像素，等比例缩放。
 - **按尺寸下载**：多档视频优先选不超过设置上限的最大档；完整选区以下载文件的实际结尾为准，不依赖网页播放器的近似时长。
 - **可选丢帧**：默认关闭；移除连续重复帧，或每 2 / 3 / 4 帧移除一帧，保持倍速后的总时长。
-- **生成后继续处理**：后台队列、取消、历史记录、成品预览、重新调整和批量保存。
+- **生成后继续处理**：后台队列、取消、成品预览和重新调整。结果列表独立滚动，支持逐项保存、勾选后保存和保存全部。
 - **历史与清理**：独立历史页，支持搜索、筛选和打开来源；查看 GIF 占用，清理文件并保留记录，或清空历史。
-- **稳定命名**：可编辑显示名称；文件名采用 Base64url、生成时间戳和唯一编号，不含中文或空格。
+- **稳定命名**：同页重复素材标题自动加序号，可编辑显示名称；文件名采用 Base64url、生成时间戳和唯一编号，不含中文或空格。
 - **本机处理**：编码器随扩展打包，提供简体中文 / 英文界面。
 
 <details>
@@ -30,14 +30,14 @@ Chrome 侧栏扩展：右键选择网页视频、GIF 或 WebP，调整片段和�
 
 ## 安装
 
-1. 在 [Release](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.9) 下载 **`gif-toolkit-chrome-0.1.9.zip`**，解压到一个固定目录。
+1. 在 [Release](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.10) 下载 **`gif-toolkit-chrome-0.1.10.zip`**，解压到一个固定目录。
 2. 打开 `chrome://extensions`，启用右上角「开发者模式」。
 3. 点击「加载已解压的扩展程序」，选择解压后**包含 `manifest.json` 的目录**。
 4. 将 Gif Toolkit 固定到 Chrome 工具栏。
 
 GitHub 自动提供的 “Source code” 是开发源码，不能直接作为已构建扩展加载。想自己编译，请看 [开发指南](docs/DEVELOPMENT.md)。
 
-**升级**：将新版本解压到原扩展目录，在扩展管理页点击重载，刷新来源网页并重新打开侧栏，确认左上角版本与所安装的包一致（当前源码构建为 **0.1.9**）。不要删除扩展再安装，以免清除原有本地历史。
+**升级**：将新版本解压到原扩展目录，在扩展管理页点击重载，刷新来源网页并重新打开侧栏，确认左上角版本与所安装的包一致（当前源码构建为 **0.1.10**）。不要删除扩展再安装，以免清除原有本地历史。
 
 ## 三步生成
 

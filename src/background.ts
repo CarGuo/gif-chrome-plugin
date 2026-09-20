@@ -1,5 +1,5 @@
-import { errorCode, hasResult, httpOrigin, isTerminal, POLICY, prepareSegment, TaskError, validateOutputName, validateSettings, type Job, type MediaSource, type Reply } from './shared/model';
-import { retainImageMetadata, sameSource, withImageMetadata } from './shared/sources';
+import { errorCode, hasResult, httpOrigin, isTerminal, POLICY, prepareSegment, TaskError, validateOutputName, validateSettings, type DownloadBatchResult, type DownloadSelection, type Job, type MediaSource, type Reply } from './shared/model';
+import { distinctSourceTitles, retainImageMetadata, sameSource, withImageMetadata } from './shared/sources';
 import { getJob, renameResult } from './shared/storage';
 import { loadPreferences, savePreferences } from './shared/preferences';
 import { installPageObserver, readPageMedia, type YoutubeSession } from './shared/page-media';
@@ -24,6 +24,25 @@ async function processor<T>(type: string, data = {}): Promise<T> {
   if (!response?.ok) throw new TaskError(response?.error ?? 'interrupted');
   return response.data;
 }
+async function downloadResult(id: string, title?: string, saveAs = false): Promise<number> {
+  let job = await getJob(id);
+  if (!job?.result || job.stage !== 'completed') throw new TaskError('invalidOutput');
+  if (!hasResult(job)) throw new TaskError('resultUnavailable');
+  if (title !== undefined) {
+    // Re-read in the write transaction so renaming cannot resurrect a cleared file.
+    job = await renameResult(job.id, validateOutputName(title));
+    void chrome.runtime.sendMessage({ type: 'job-updated', job }).catch(() => {});
+  }
+  const url = await processor<string>('result-url', { id: job.id });
+  try {
+    const downloadId = await chrome.downloads.download({ url, filename: `GifToolkit/${job.result!.filename}`, saveAs, conflictAction: 'uniquify' });
+    const [item] = await chrome.downloads.search({ id: downloadId });
+    if (!item || item.state !== 'in_progress') await processor('release-result-url', { url });
+    return downloadId;
+  } catch (error) {
+    await processor('release-result-url', { url }); throw error;
+  }
+}
 async function scan(tabId: number, focus?: { frameId?: number; srcUrl?: string; mediaType?: string }) {
   await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: 'MAIN', func: installPageObserver });
   const injection = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['content.js'] });
@@ -35,7 +54,8 @@ async function scan(tabId: number, focus?: { frameId?: number; srcUrl?: string; 
     return response.data.map(s => ({ ...(s.kind === 'video' && page.result ? attachResources(s, page.result) : s), tabId, frameId: result.frameId }));
   }));
   const previous = await chrome.storage.session.get('sources');
-  const sources = retainImageMetadata(results.flatMap(r => r.status === 'fulfilled' ? r.value : []), previous.sources ?? []);
+  const sources = distinctSourceTitles(retainImageMetadata(results.flatMap(r => r.status === 'fulfilled' ? r.value : []), previous.sources ?? []),
+    (title, index) => chrome.i18n.getMessage('numberedMedia', [String(index).padStart(2, '0'), title]));
   const frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => ({ page: location.href, frames: [...document.querySelectorAll('iframe[src]')].filter(frame => { const rect = frame.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && getComputedStyle(frame).visibility !== 'hidden'; }).map(frame => (frame as HTMLIFrameElement).src) }) });
   const frameOrigins = [...new Set(frames.flatMap(result => result.result?.frames ?? []).filter(url => /^https?:/.test(url)).map(httpOrigin))];
   const missingFrameOrigins = (await Promise.all(frameOrigins.map(async origin => await chrome.permissions.contains({ origins: [origin] }) ? undefined : origin))).filter(Boolean);
@@ -155,26 +175,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return session;
       }
       case 'media-permission': return chrome.permissions.contains({ origins: [httpOrigin(message.url)] });
-      case 'download': {
-        let job = await getJob(message.id);
-        if (!job?.result || job.stage !== 'completed') throw new TaskError('invalidOutput');
-        if (!hasResult(job)) throw new TaskError('resultUnavailable');
-        // v0.1.3: rename the persisted result metadata, not the encoded bytes. History and download agree.
-        if (message.title !== undefined) {
-          // Re-read inside the write transaction so renaming cannot resurrect a cleared file.
-          job = await renameResult(job.id, validateOutputName(message.title));
-          void chrome.runtime.sendMessage({ type: 'job-updated', job }).catch(() => {});
+      case 'download': return downloadResult(message.id, message.title, !!message.saveAs);
+      case 'download-many': {
+        // v0.1.10: one immutable selection belongs to the background, so closing or
+        // filtering the panel cannot change which files are handed to Chrome.
+        if (!Array.isArray(message.items) || !message.items.length || message.items.length > POLICY.historyCount) throw new TaskError('invalidSettings');
+        const items: DownloadSelection[] = message.items.map((item: DownloadSelection) => {
+          if (typeof item?.id !== 'string' || !item.id) throw new TaskError('invalidSettings');
+          return { id: item.id, title: validateOutputName(item.title) };
+        });
+        if (new Set(items.map(item => item.id)).size !== items.length) throw new TaskError('invalidSettings');
+        const result: DownloadBatchResult = { started: [], failed: [] };
+        for (const item of items) {
+          try { result.started.push({ id: item.id, downloadId: await downloadResult(item.id, item.title) }); }
+          catch (error) { result.failed.push({ id: item.id, error: errorCode(error) }); }
         }
-        const url = await processor<string>('result-url', { id: job.id });
-        try {
-          const id = await chrome.downloads.download({ url, filename: `GifToolkit/${job.result!.filename}`, saveAs: !!message.saveAs });
-          // A small file may finish before onChanged can observe it; release is idempotent.
-          const [item] = await chrome.downloads.search({ id });
-          if (!item || item.state !== 'in_progress') await processor('release-result-url', { url });
-          return id;
-        } catch (error) {
-          await processor('release-result-url', { url }); throw error;
-        }
+        return result;
       }
       default: throw new TaskError('pageUnavailable');
     }
