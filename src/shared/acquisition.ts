@@ -11,9 +11,11 @@ export function xPostId(value: string): string | undefined {
   } catch { return undefined; }
 }
 
-export function acquisition(source: MediaSource): 'download' | 'x' | 'youtube' | 'hls' | 'dash' | 'blob' | 'unresolved' {
+export function acquisition(source: MediaSource): 'local' | 'download' | 'x' | 'youtube' | 'hls' | 'dash' | 'blob' | 'unresolved' {
   // v0.1.7: all video paths acquire bytes. A manifest is a download transport, not a reason
   // to switch to seeking the page player. Provider adapters are peers of generic transports.
+  // v0.1.12: a picked file already owns its bytes locally; no origin, tab or network fetch.
+  if (source.local) return 'local';
   if (source.kind === 'video' && !source.resource && youtubeId(source.pageUrl)) return 'youtube';
   if (source.kind === 'video' && !source.resource && !/^https?:|^data:/.test(source.url) && xPostId(source.mediaPageUrl ?? source.pageUrl)) return 'x';
   const resource = chosenResource(source);
@@ -26,6 +28,8 @@ export function acquisition(source: MediaSource): 'download' | 'x' | 'youtube' |
 export function mediaOrigins(sources: MediaSource[]): string[] {
   return [...new Set(sources.flatMap(source => {
     const mode = acquisition(source);
+    // A picked file never touches the network, so it asks for no host permission.
+    if (mode === 'local') return [];
     if (mode === 'x') return X_MEDIA_ORIGINS;
     if (mode === 'youtube') return ['https://*.googlevideo.com/*'];
     // Manifest segments/keys can live on other CDNs. Ask in the Generate gesture, before any

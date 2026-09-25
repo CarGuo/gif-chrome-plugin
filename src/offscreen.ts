@@ -6,9 +6,10 @@ import { chosenResource } from './shared/media-resource';
 import type { YoutubeSession } from './shared/page-media';
 import { acquisition } from './shared/acquisition';
 import { downloadSource } from './shared/download';
-import { errorCode, fitDimensions, isTerminal, outputDuration, sampleCount, sampleTime, POLICY, rpc, TaskError, validateSegment, validateWorkload, type DropFrames, type Job, type Reply } from './shared/model';
+import { createLocalSource, isLocalSource } from './shared/local-source';
+import { errorCode, fitDimensions, isTerminal, outputDuration, sampleCount, sampleTime, POLICY, rpc, TaskError, validateSegment, validateWorkload, type DropFrames, type Job, type MediaSource, type Reply } from './shared/model';
 import { makeFilename } from './shared/filename';
-import { clearStoredItems, deleteResult, getCacheSummary, getHistory, getJob, getJobs, getResult, pruneHistory, removeJob, saveJob, saveJobs, saveResult } from './shared/storage';
+import { clearStoredItems, deleteResult, getCacheSummary, getHistory, getJob, getJobs, getLocalFile, getLocalSources, getResult, pruneHistory, removeJob, removeLocalSource, saveJob, saveJobs, saveLocalFile, saveLocalSource, saveResult } from './shared/storage';
 import { optimizeGif, WorkerClient } from './worker-client';
 
 const queue: Job[] = [];
@@ -43,7 +44,8 @@ async function processJob(job: Job) {
   try {
     await update(job, { stage: 'loading', progress: 0.01, error: undefined, metrics });
     let width: number, height: number, duration: number | null, staticImage = false;
-    if (job.source.kind === 'video') await player({ type: 'inspect' });
+    // A picked file has no page player to inspect or seek; its bytes are already stored.
+    if (job.source.kind === 'video' && !job.source.local) await player({ type: 'inspect' });
     const time = performance.now();
     await update(job, { stage: 'downloading', progress: 0.02 });
     const progress = async (loaded: number, total: number) => {
@@ -53,7 +55,11 @@ async function processJob(job: Job) {
     const mode = acquisition(job.source);
     let blob: Blob;
     try {
-      if (job.source.kind !== 'video' || mode === 'x') blob = await downloadSource(job.source, abort.signal, progress, job.settings.maxSide);
+      if (mode === 'local') {
+        blob = await getLocalFile(job.source.id) ?? (() => { throw new TaskError('sourceGone'); })();
+        await progress(blob.size, blob.size);
+      }
+      else if (job.source.kind !== 'video' || mode === 'x') blob = await downloadSource(job.source, abort.signal, progress, job.settings.maxSide);
       else if (mode === 'blob') {
         readingBlob = true; blob = await player<Blob>({ type: 'read-blob' }); readingBlob = false;
       } else {
@@ -307,6 +313,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const worker = imageClient();
         try { return await worker.request('open', { blob: await downloadSource(message.source, new AbortController().signal) }); }
         finally { worker.close(); }
+      }
+      case 'local-list':
+        return getLocalSources();
+      case 'local-import': {
+        const files = message.files;
+        if (!Array.isArray(files) || !files.length || files.some(file => !(file instanceof File))) throw new TaskError('invalidSettings');
+        const imported: MediaSource[] = [];
+        for (const file of files) {
+          const worker = videoClient();
+          try {
+            const meta = await worker.request<{ width: number; height: number; duration: number }>('open', { blob: file });
+            const source = createLocalSource(file, meta);
+            await saveLocalFile(source.id, file);
+            await saveLocalSource(source);
+            imported.push(source);
+          } finally { worker.close(); }
+        }
+        return imported;
+      }
+      case 'local-remove': {
+        const id = message.id;
+        if (typeof id !== 'string' || queue.some(job => job.source.id === id) || current?.job.source.id === id) throw new TaskError('playerBusy');
+        // Existing history jobs keep their own data; only the reusable library entry is dropped.
+        await removeLocalSource(id);
+        return null;
       }
       case 'result-url': {
         const blob = await getResult(message.id); if (!blob) throw new TaskError('resultUnavailable');

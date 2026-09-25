@@ -1,13 +1,17 @@
-import { hasResult, isTerminal, POLICY, TaskError, type CacheSummary, type HistorySnapshot, type Job } from './model';
+import { hasResult, isTerminal, POLICY, TaskError, type CacheSummary, type HistorySnapshot, type Job, type MediaSource } from './model';
 import { makeFilename } from './filename';
 import { historyProblem, migrateJob } from './history';
 let database: Promise<IDBDatabase> | undefined;
 function db() {
   return database ??= new Promise((resolve, reject) => {
-    const request = indexedDB.open('gif-toolkit', 1);
+    const request = indexedDB.open('gif-toolkit', 2);
     request.onupgradeneeded = () => {
-      request.result.createObjectStore('jobs', { keyPath: 'id' });
-      request.result.createObjectStore('results');
+      // v1: jobs and finished GIFs. v0.1.12 adds picked source files, kept apart
+      // from results so their lifetime follows the jobs that still reference them.
+      if (!request.result.objectStoreNames.contains('jobs')) request.result.createObjectStore('jobs', { keyPath: 'id' });
+      if (!request.result.objectStoreNames.contains('results')) request.result.createObjectStore('results');
+      if (!request.result.objectStoreNames.contains('localFiles')) request.result.createObjectStore('localFiles');
+      if (!request.result.objectStoreNames.contains('localSources')) request.result.createObjectStore('localSources', { keyPath: 'id' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -63,6 +67,24 @@ function canClean(value: unknown) {
 export const getResult = (id: string): Promise<Blob | undefined> => run('results', 'readonly', s => s.get(id));
 export const saveResult = (id: string, blob: Blob) => run('results', 'readwrite', s => s.put(blob, id));
 export const deleteResult = (id: string) => run('results', 'readwrite', s => s.delete(id));
+export const getLocalFile = (id: string): Promise<Blob | undefined> => run('localFiles', 'readonly', s => s.get(id));
+export const saveLocalFile = (id: string, blob: Blob) => run('localFiles', 'readwrite', s => s.put(blob, id));
+// A picked file is a reusable input library entry, not job output. Its bytes stay until
+// the user removes the imported entry, so the same file can be turned into many GIFs.
+export const removeLocalFile = (id: string) => run('localFiles', 'readwrite', s => s.delete(id));
+// Picked-source metadata lives independently of the current tab and survives restarts.
+export const getLocalSources = (): Promise<MediaSource[]> => run<MediaSource[]>('localSources', 'readonly', s => s.getAll());
+export const saveLocalSource = (source: MediaSource) => run('localSources', 'readwrite', s => s.put(source));
+export async function removeLocalSource(id: string): Promise<void> {
+  const database = await db();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(['localSources', 'localFiles'], 'readwrite');
+    transaction.objectStore('localSources').delete(id);
+    transaction.objectStore('localFiles').delete(id);
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = transaction.onerror = () => reject(transaction.error);
+  });
+}
 // v0.1.9: history and retained files have separate lifetimes. Read and update both
 // stores in one transaction; a cleanup must never delete a running job's output.
 export async function getCacheSummary(): Promise<CacheSummary> {

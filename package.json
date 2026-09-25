@@ -1,6 +1,6 @@
 {
   "name": "gif-toolkit-chrome",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "type": "module",
   "description": "Turn selected webpage video and animated images into size-limited GIFs, locally.",

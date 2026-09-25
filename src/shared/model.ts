@@ -18,6 +18,9 @@ export interface MediaSource {
   blobKind?: 'file' | 'mse'; youtubeVideoId?: string;
   resources?: import('./media-resource').MediaResource[]; resource?: import('./media-resource').MediaResource;
   resourceSelectionRequired?: boolean;
+  // v0.1.12: a file picked from the device, independent of any tab or network request.
+  // The bytes live in IndexedDB under localFiles until every job using them is removed.
+  local?: boolean;
 }
 export interface Segment { id: string; start: number; end: number; endMode?: 'time' | 'source' }
 export const DROP_FRAME_MODES = ['none', 'duplicates', 'every2', 'every3', 'every4'] as const;

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { defaultSegment, DEFAULT_SETTINGS, DROP_FRAME_MODES, editSegment, errorCode, hasResult, httpOrigin, isTerminal, outputDuration, POLICY, prepareSegment, rpc, TaskError, validateOutputName, validateSettings, type CacheSummary, type DownloadBatchResult, type DropFrames, type ExportSettings, type HistoryProblem, type HistorySnapshot, type Job, type MediaSource, type Segment } from '../shared/model';
 import { makeFilename } from '../shared/filename';
 import { initializeClips, withImageMetadata } from '../shared/sources';
+import { isLocalSource } from '../shared/local-source';
 import { mediaOrigins } from '../shared/acquisition';
 import { getResult } from '../shared/storage';
 import { dateTime, errorText, number, stageText, t, time, type TextKey } from './i18n';
@@ -13,6 +14,7 @@ const dropFrameLabels: Record<DropFrames, TextKey> = { none: 'dropFramesOff', du
 
 function App() {
   const [sources, setSources] = useState<MediaSource[]>([]);
+  const [localSources, setLocalSources] = useState<MediaSource[]>([]);
   const [missingFrameOrigins, setMissingFrameOrigins] = useState<string[]>([]);
   const [sourceNames, setSourceNames] = useState<Record<string, string>>({});
   const [jobNames, setJobNames] = useState<Record<string, string>>({});
@@ -32,6 +34,15 @@ function App() {
   const [cleanup, setCleanup] = useState<CleanupRequest | null>(null);
   const previewRequest = useRef(0);
   const sourceTab = useRef<number | undefined>(undefined);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  function acceptLocalSources(next: MediaSource[]) {
+    setLocalSources(next);
+    setSelected(previous => Object.fromEntries(next.filter(s => previous[s.id]).map(s => [s.id, initializeClips(previous[s.id], s)])));
+  }
+  async function loadLocalSources() {
+    acceptLocalSources(await rpc<MediaSource[]>({ target: 'background', type: 'local-list' }));
+  }
 
   function acceptSources(next: MediaSource[]) {
     setSources(next); sourceTab.current = next[0]?.tabId ?? sourceTab.current;
@@ -47,6 +58,7 @@ function App() {
       setSettings(values); setSettingsReady(true);
     }).catch(error => setNotice(errorText(errorCode(error))));
     void chrome.storage.session.get(['sources', 'activeTabId', 'missingFrameOrigins']).then(data => { sourceTab.current = data.activeTabId; setMissingFrameOrigins(data.missingFrameOrigins ?? []); acceptSources(data.sources ?? []); });
+    void loadLocalSources().catch(error => setNotice(errorText(errorCode(error))));
     void refreshJobs().catch(error => setNotice(errorText(errorCode(error))));
     const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area === 'session' && changes.activeTabId) sourceTab.current = changes.activeTabId.newValue;
@@ -91,6 +103,20 @@ function App() {
       if (!granted) throw new TaskError('permissionRequired');
     }
   }
+  async function importLocalFiles(files: FileList | null) {
+    if (!files || !files.length) return;
+    const imported = await rpc<MediaSource[]>({ target: 'background', type: 'local-import', files: [...files] });
+    if (imported.length) {
+      setLocalSources(previous => [...imported, ...previous]);
+      setSelected(previous => ({ ...previous, ...Object.fromEntries(imported.map(source => [source.id, [defaultSegment(source)]])) }));
+    }
+    if (fileInput.current) fileInput.current.value = '';
+  }
+  async function removeLocal(source: MediaSource) {
+    await rpc({ target: 'background', type: 'local-remove', id: source.id });
+    setLocalSources(previous => previous.filter(item => item.id !== source.id));
+    setSelected(previous => { const next = { ...previous }; delete next[source.id]; return next; });
+  }
   async function inspectImage(source: MediaSource, authorized = false) {
     if (!authorized) await requestMediaAccess([source]);
     const meta = await rpc<{ width: number; height: number; duration: number | null; frames: number; kind: MediaSource['kind'] }>({ target: 'background', type: 'inspect-image', source });
@@ -105,10 +131,11 @@ function App() {
     setSelected(previous => ({ ...previous, [source.id]: [defaultSegment(source)] }));
   }
   function changeClip(sourceId: string, id: string, patch: Partial<Segment>) {
-    const duration = sources.find(source => source.id === sourceId)?.duration ?? null;
+    const duration = allSources.find(source => source.id === sourceId)?.duration ?? null;
     setSelected(previous => ({ ...previous, [sourceId]: previous[sourceId].map(s => s.id === id ? editSegment(s, patch, duration) : s) }));
   }
-  const chosen = sources.filter(s => selected[s.id]);
+  const allSources = [...sources, ...localSources];
+  const chosen = allSources.filter(s => selected[s.id]);
   const sourceName = (source: MediaSource) => sourceNames[source.id] ?? source.title;
   const jobName = (job: Job) => jobNames[job.id] ?? job.source.title;
   async function download(job: Job, saveAs: boolean) {
@@ -156,7 +183,7 @@ function App() {
     setPreview({ job, url: URL.createObjectURL(blob) });
   }
   function restoreJob(job: Job) {
-    const source = sources.find(s => s.id === job.source.id && s.documentKey === job.source.documentKey);
+    const source = allSources.find(s => s.id === job.source.id && s.documentKey === job.source.documentKey);
     if (!source) { setNotice(errorText('sourceGone')); return; }
     setSettings(job.settings); setSelected(previous => ({ ...previous, [source.id]: initializeClips([{ ...job.segment, id: crypto.randomUUID() }], source) }));
     setSourceNames(previous => ({ ...previous, [source.id]: jobName(job) }));
@@ -207,17 +234,19 @@ function App() {
     {notice && <div role="alert" className="notice"><span>{notice}</span><button aria-label={t('closePreview')} onClick={() => setNotice(null)}>×</button></div>}
     <div hidden={view !== 'create'}>
     <section className="intro"><div><h1>{t('sourcesTitle')}</h1><p>{t('sourcesHint')}</p></div><button className="icon-button refresh" disabled={!!busy} onClick={() => void perform(async () => { acceptSources(await rpc<MediaSource[]>({ target: 'background', type: 'scan' })); }, 'scan')} aria-label={t('refresh')} title={t('refresh')}>↻</button></section>
+    <input ref={fileInput} type="file" accept="video/*" multiple hidden onChange={event => void perform(() => importLocalFiles(event.target.files), 'local-import')} />
+    <button className="site-link local-import" disabled={!!busy} onClick={() => fileInput.current?.click()}>{t('importLocalVideos')} <span>＋</span></button>
     {missingFrameOrigins.length > 0 && <div className="notice"><span>{t('embeddedMediaHint', missingFrameOrigins.map(origin => new URL(origin).host).join(', '))}</span><button onClick={() => void perform(async () => {
       if (!await chrome.permissions.request({ origins: missingFrameOrigins })) throw new TaskError('permissionRequired');
       acceptSources(await rpc<MediaSource[]>({ target: 'background', type: 'scan', tabId: sourceTab.current }));
     })}>{t('enableEmbeddedMedia')}</button></div>}
-    {!sources.length ? <div className="empty"><div className="empty-art"><span>▶</span><i>GIF</i></div><h2>{busy === 'scan' ? t('scanning') : t('emptyTitle')}</h2><p>{t('emptyHint')}</p></div> : <>
-      <div className="source-list">{sources.map(source => <button key={source.id} className={`source ${selected[source.id] ? 'selected' : ''}`} onClick={() => void perform(() => toggle(source), source.id)} disabled={!!busy} aria-pressed={!!selected[source.id]}>
-        <div className="thumbnail">{source.poster ? <img src={source.poster} alt="" referrerPolicy="no-referrer" /> : <span>▶</span>}<small>{t((source.kind === 'video' ? 'sourceVideo' : source.kind === 'gif' ? 'sourceGif' : source.kind === 'image' ? 'sourceImage' : 'sourceWebp'))}</small></div>
+    {!sources.length && !localSources.length ? <div className="empty"><div className="empty-art"><span>▶</span><i>GIF</i></div><h2>{busy === 'scan' ? t('scanning') : t('emptyTitle')}</h2><p>{t('emptyHint')}</p></div> : <>
+      <div className="source-list">{allSources.map(source => <button key={source.id} className={`source ${selected[source.id] ? 'selected' : ''}`} onClick={() => void perform(() => toggle(source), source.id)} disabled={!!busy} aria-pressed={!!selected[source.id]}>
+        <div className="thumbnail">{source.poster ? <img src={source.poster} alt="" referrerPolicy="no-referrer" /> : <span>▶</span>}<small>{t(isLocalSource(source) ? 'sourceLocalVideo' : (source.kind === 'video' ? 'sourceVideo' : source.kind === 'gif' ? 'sourceGif' : source.kind === 'image' ? 'sourceImage' : 'sourceWebp'))}</small></div>
         <div className="source-text"><strong>{sourceName(source)}</strong><p>{source.width ? `${source.width} × ${source.height}` : '—'}<span>·</span>{busy === source.id ? t('loadingImage') : time(source.duration)}</p></div><span className="checkbox">{selected[source.id] ? '✓' : ''}</span>
       </button>)}</div>
-      <button className="site-link" onClick={() => void perform(enableSite)}>{t('enableSite')} <span>↗</span></button>
-      <p className="fine-print">{t('contextMenuHint')}</p>
+      {!!sources.length && <><button className="site-link" onClick={() => void perform(enableSite)}>{t('enableSite')} <span>↗</span></button>
+      <p className="fine-print">{t('contextMenuHint')}</p></>}
     </>}
     {chosen.length > 0 && <>
       <section className="card clips"><div className="section-title"><h2>{t('clipsTitle')}</h2><span className="count-badge">{clipCount.toString().padStart(2, '0')}</span></div>
@@ -230,7 +259,7 @@ function App() {
           <p className="speed-hint">{t('speedHint')}</p>
         </div>
         {chosen.map(source => <div className="clip-group" key={source.id}>
-          <div className="clip-source"><strong title={sourceName(source)}>{sourceName(source)}</strong><button className="text-button" disabled={!!busy || source.duration === null} onClick={() => setSelected(previous => ({ ...previous, [source.id]: [...previous[source.id], defaultSegment(source)] }))}>+ {t('addClip')}</button></div>
+          <div className="clip-source"><strong title={sourceName(source)}>{sourceName(source)}</strong><span>{isLocalSource(source) && <button className="text-button" disabled={!!busy} onClick={() => void perform(() => removeLocal(source), source.id)}>{t('removeLocalImport')}</button>}<button className="text-button" disabled={!!busy || source.duration === null} onClick={() => setSelected(previous => ({ ...previous, [source.id]: [...previous[source.id], defaultSegment(source)] }))}>+ {t('addClip')}</button></span></div>
           {source.kind === 'video' && !source.youtubeVideoId && ((source.resources?.length ?? 0) > 1 || source.resourceSelectionRequired) && source.url.startsWith('blob:') && <label>{t('mediaResource')}<select value={source.resource?.url ?? ''} onChange={event => setSources(previous => previous.map(item => item.id === source.id ? { ...item, resource: item.resources?.find(resource => resource.url === event.target.value) } : item))}>
             <option value="">{t('chooseMediaResource')}</option>{source.resources!.map(resource => <option key={resource.url} value={resource.url}>{new URL(resource.url).host}{new URL(resource.url).pathname}</option>)}
           </select><span className="fine-print">{t('mediaResourceHint')}</span></label>}
@@ -262,7 +291,7 @@ function App() {
         <p id="drop-frames-hint" className="fine-print">{t('dropFramesHint')}</p>
         <p className="fine-print">{t('settingsHint')}</p>
       </section>
-      {chosen.some(s => s.kind === 'video') && <p className="player-notice"><span>ⓘ</span>{t('playerNotice')}</p>}
+      {chosen.some(s => s.kind === 'video' && !isLocalSource(s)) && <p className="player-notice"><span>ⓘ</span>{t('playerNotice')}</p>}
       <button className="generate" disabled={!settingsReady || !!busy || !clipCount || chosen.some(s => s.kind === 'video' && s.duration === null)} onClick={() => void perform(generate, 'generate')}><span aria-hidden="true">✦</span>{busy === 'generate' ? t('submitting') : clipCount === 1 ? t('generateOne') : t('generate', String(clipCount))}<span aria-hidden="true">→</span></button>
     </>}
     </div>

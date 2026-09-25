@@ -1,6 +1,7 @@
 import { errorCode, hasResult, httpOrigin, isTerminal, POLICY, prepareSegment, TaskError, validateOutputName, validateSettings, type DownloadBatchResult, type Job, type MediaSource, type Reply } from './shared/model';
 import { parseDownloadSelection } from './shared/download-selection';
 import { distinctSourceTitles, retainImageMetadata, sameSource, withImageMetadata } from './shared/sources';
+import { isLocalSource } from './shared/local-source';
 import { getJob, renameResult } from './shared/storage';
 import { loadPreferences, savePreferences } from './shared/preferences';
 import { installPageObserver, readPageMedia, type YoutubeSession } from './shared/page-media';
@@ -138,8 +139,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!Array.isArray(message.items) || !message.items.length || message.items.length > POLICY.maxJobs) throw new TaskError('invalidSegment');
         const jobs: Job[] = message.items.map((item: { source: MediaSource; segment: Job['segment']; settings: Job['settings'] }) => {
           const settings = validateSettings(item.settings); const source = item.source;
-          if (!source || !Number.isInteger(source.tabId) || !Number.isInteger(source.frameId) || !source.documentKey || !source.id || !['video', 'gif', 'webp', 'image'].includes(source.kind)) throw new TaskError('sourceGone');
-          httpOrigin(source.pageUrl);
+          if (!source || !source.documentKey || !source.id || !['video', 'gif', 'webp', 'image'].includes(source.kind)) throw new TaskError('sourceGone');
+          // Picked files have no tab or web origin; everything else must still identify both.
+          if (isLocalSource(source)) {
+            if (source.kind !== 'video' || !source.local) throw new TaskError('sourceGone');
+          } else {
+            if (!Number.isInteger(source.tabId) || !Number.isInteger(source.frameId)) throw new TaskError('sourceGone');
+            httpOrigin(source.pageUrl);
+          }
           source.title = validateOutputName(source.title);
           const segment = prepareSegment(item.segment, source, settings.fps, settings.speed);
           return { id: crypto.randomUUID(), source, segment, settings,
@@ -157,6 +164,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         return meta;
       }
+      case 'local-list': return processor('local-list');
+      case 'local-import': return processor('local-import', { files: message.files });
+      case 'local-remove': return processor('local-remove', { id: message.id });
       case 'player': {
         const job = await getJob(message.jobId);
         if (!job || (isTerminal(job.stage) && message.command?.type !== 'cancel-read')) throw new TaskError('cancelled');
