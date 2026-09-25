@@ -167,6 +167,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'local-list': return processor('local-list');
       case 'local-import': return processor('local-import', { files: message.files });
       case 'local-remove': return processor('local-remove', { id: message.id });
+      case 'local-clear': return processor('local-clear');
       case 'player': {
         const job = await getJob(message.jobId);
         if (!job || (isTerminal(job.stage) && message.command?.type !== 'cancel-read')) throw new TaskError('cancelled');

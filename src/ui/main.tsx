@@ -117,6 +117,15 @@ function App() {
     setLocalSources(previous => previous.filter(item => item.id !== source.id));
     setSelected(previous => { const next = { ...previous }; delete next[source.id]; return next; });
   }
+  async function clearLocalSources() {
+    const remaining = await rpc<MediaSource[]>({ target: 'background', type: 'local-clear' });
+    setLocalSources(remaining);
+    setSelected(previous => {
+      const keep = new Set(remaining.map(source => source.id));
+      return Object.fromEntries(Object.entries(previous).filter(([id]) => keep.has(id)));
+    });
+    setNotice(remaining.length ? t('localClearKeptBusy', String(remaining.length)) : t('localClearedAll'));
+  }
   async function inspectImage(source: MediaSource, authorized = false) {
     if (!authorized) await requestMediaAccess([source]);
     const meta = await rpc<{ width: number; height: number; duration: number | null; frames: number; kind: MediaSource['kind'] }>({ target: 'background', type: 'inspect-image', source });
@@ -235,16 +244,30 @@ function App() {
     <div hidden={view !== 'create'}>
     <section className="intro"><div><h1>{t('sourcesTitle')}</h1><p>{t('sourcesHint')}</p></div><button className="icon-button refresh" disabled={!!busy} onClick={() => void perform(async () => { acceptSources(await rpc<MediaSource[]>({ target: 'background', type: 'scan' })); }, 'scan')} aria-label={t('refresh')} title={t('refresh')}>↻</button></section>
     <input ref={fileInput} type="file" accept="video/*" multiple hidden onChange={event => void perform(() => importLocalFiles(event.target.files), 'local-import')} />
-    <button className="site-link local-import" disabled={!!busy} onClick={() => fileInput.current?.click()}>{t('importLocalVideos')} <span>＋</span></button>
+    <button type="button" className="local-import" disabled={!!busy} onClick={() => fileInput.current?.click()}>
+      <span className="local-import-icon" aria-hidden="true">↑</span>
+      <span className="local-import-body">
+        <span className="local-import-text">{t('importLocalVideos')}</span>
+        <span className="local-import-meta">{t('importLocalVideosHint')}</span>
+      </span>
+      <span className="local-import-plus" aria-hidden="true">＋</span>
+    </button>
     {missingFrameOrigins.length > 0 && <div className="notice"><span>{t('embeddedMediaHint', missingFrameOrigins.map(origin => new URL(origin).host).join(', '))}</span><button onClick={() => void perform(async () => {
       if (!await chrome.permissions.request({ origins: missingFrameOrigins })) throw new TaskError('permissionRequired');
       acceptSources(await rpc<MediaSource[]>({ target: 'background', type: 'scan', tabId: sourceTab.current }));
     })}>{t('enableEmbeddedMedia')}</button></div>}
     {!sources.length && !localSources.length ? <div className="empty"><div className="empty-art"><span>▶</span><i>GIF</i></div><h2>{busy === 'scan' ? t('scanning') : t('emptyTitle')}</h2><p>{t('emptyHint')}</p></div> : <>
-      <div className="source-list">{allSources.map(source => <button key={source.id} className={`source ${selected[source.id] ? 'selected' : ''}`} onClick={() => void perform(() => toggle(source), source.id)} disabled={!!busy} aria-pressed={!!selected[source.id]}>
-        <div className="thumbnail">{source.poster ? <img src={source.poster} alt="" referrerPolicy="no-referrer" /> : <span>▶</span>}<small>{t(isLocalSource(source) ? 'sourceLocalVideo' : (source.kind === 'video' ? 'sourceVideo' : source.kind === 'gif' ? 'sourceGif' : source.kind === 'image' ? 'sourceImage' : 'sourceWebp'))}</small></div>
-        <div className="source-text"><strong>{sourceName(source)}</strong><p>{source.width ? `${source.width} × ${source.height}` : '—'}<span>·</span>{busy === source.id ? t('loadingImage') : time(source.duration)}</p></div><span className="checkbox">{selected[source.id] ? '✓' : ''}</span>
-      </button>)}</div>
+      <div className="source-list">{allSources.map(source => {
+        const local = isLocalSource(source);
+        return <div key={source.id} className={`source ${selected[source.id] ? 'selected' : ''}`}>
+          <button type="button" className="source-select" disabled={!!busy} aria-pressed={!!selected[source.id]} onClick={() => void perform(() => toggle(source), source.id)}>
+            <div className="thumbnail">{source.poster ? <img src={source.poster} alt="" referrerPolicy="no-referrer" /> : <span>▶</span>}<small>{t(local ? 'sourceLocalVideo' : (source.kind === 'video' ? 'sourceVideo' : source.kind === 'gif' ? 'sourceGif' : source.kind === 'image' ? 'sourceImage' : 'sourceWebp'))}</small></div>
+            <div className="source-text"><strong>{sourceName(source)}</strong><p>{source.width ? `${source.width} × ${source.height}` : '—'}<span>·</span>{busy === source.id ? t('loadingImage') : time(source.duration)}</p></div><span className="checkbox">{selected[source.id] ? '✓' : ''}</span>
+          </button>
+          {local && <button type="button" className="source-remove" disabled={!!busy} aria-label={t('removeLocalImport')} title={t('removeLocalImport')} onClick={() => void perform(() => removeLocal(source), source.id)}>×</button>}
+        </div>;
+      })}</div>
+      {!!localSources.length && <button type="button" className="text-button clear-local" disabled={!!busy} onClick={() => void perform(clearLocalSources, 'local-remove')}>{t('clearLocalVideos')}</button>}
       {!!sources.length && <><button className="site-link" onClick={() => void perform(enableSite)}>{t('enableSite')} <span>↗</span></button>
       <p className="fine-print">{t('contextMenuHint')}</p></>}
     </>}

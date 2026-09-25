@@ -4,14 +4,14 @@
 
 A Chrome side panel extension for webpage videos, GIFs and WebP images, with batch import for local video files. Select clips, adjust speed and export locally. Defaults: **4 MB · 800 px longest side · 10 fps**. No desktop application or conversion server required.
 
-[简体中文](README.md) · [Download v0.1.12](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.12) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/CarGuo/gif-chrome-plugin/issues)
+[简体中文](README.md) · [Download v0.1.13](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.13) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/CarGuo/gif-chrome-plugin/issues)
 
-> **Published version: v0.1.12, Chrome 148+ required.** Install in developer mode. The extension is not listed in the Chrome Web Store. It supports both webpage capture and local video import; see the verification table for the remaining X and YouTube acceptance gaps.
+> **Published version: v0.1.13, Chrome 148+ required.** Install in developer mode. The extension is not listed in the Chrome Web Store. It supports both webpage capture and local video import; see the verification table for the remaining X and YouTube acceptance gaps.
 
 ## Features
 
 - **Two kinds of sources**: right-click webpage videos, GIFs and WebP, or choose **Import videos from this device** to pick several local files at once. Local files are read directly — no network, no host permission, works offline.
-- **A reusable local library**: imported videos stay available across sessions for repeated exports, until you choose **Remove import**. They cannot be removed while a job using them is running.
+- **A reusable local library**: imported videos stay available across sessions for repeated exports. After exporting, remove a single video with the **×** on its card, or use **Clear all imported videos** to remove them at once (videos currently being exported are kept). **Remove import** is also available in the clip section. Removing a video deletes its file; saved GIFs are untouched.
 - Right-click media to open the side panel, or scan a page from the toolbar.
 - Select multiple sources and clips; each clip becomes a separate GIF. The full duration is selected by default.
 - Speed from 0.1× to 10×, common presets and an estimated output duration.
@@ -25,7 +25,7 @@ A Chrome side panel extension for webpage videos, GIFs and WebP images, with bat
 
 ## Install and update
 
-1. Download **`gif-toolkit-chrome-0.1.12.zip`** from the [release page](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.12) and extract it to a permanent folder.
+1. Download **`gif-toolkit-chrome-0.1.13.zip`** from the [release page](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.13) and extract it to a permanent folder.
 2. Open `chrome://extensions` and enable **Developer mode**.
 3. Click **Load unpacked** and select the extracted folder containing `manifest.json`.
 4. Pin Gif Toolkit to the toolbar.
@@ -59,7 +59,7 @@ Turning optional frame removal off does **not** disable automatic size optimizat
 
 | Scenario | Status |
 | --- | --- |
-| Local video batch import (kept across sessions, removable) | Unit/contract tests pass; **real-Chrome manual acceptance pending** |
+| Local video batch import (kept across sessions, per-card remove, clear all) | Real Chromium end-to-end passes; **real-Chrome manual acceptance pending** |
 | Ordinary landscape/portrait videos; multiple sources and clips | Passed local real-browser end-to-end tests |
 | GIF, animated WebP and transparent WebP | Passed conversion and independent output decoding |
 | Defaults, speed, optional frame removal, size limits and history | Passed UI and output checks |

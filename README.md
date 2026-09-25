@@ -4,14 +4,14 @@
 
 Chrome 侧栏扩展：既可以右键选择网页视频、GIF 或 WebP，也可以批量导入本地视频；调整片段和速度，在本机生成 GIF。默认 **4 MB · 最长边 800 px · 10 fps**，无需安装桌面软件或转码服务。
 
-[English](README.en.md) · [下载 v0.1.12](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.12) · [使用指南](docs/USER_GUIDE.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/CarGuo/gif-chrome-plugin/issues)
+[English](README.en.md) · [下载 v0.1.13](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.13) · [使用指南](docs/USER_GUIDE.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/CarGuo/gif-chrome-plugin/issues)
 
-> **当前已发布版本为 v0.1.12，要求 Chrome 148+。** 通过开发者模式安装，尚未上架 Chrome Web Store。支持网页媒体抓取和本地视频批量导入两条来源；X、YouTube 等平台的验证边界见下文。
+> **当前已发布版本为 v0.1.13，要求 Chrome 148+。** 通过开发者模式安装，尚未上架 Chrome Web Store。支持网页媒体抓取和本地视频批量导入两条来源；X、YouTube 等平台的验证边界见下文。
 
 ## 功能
 
 - **两种来源**：右键抓取网页视频、GIF 或 WebP；也可点「从电脑批量导入视频」一次选择多个本地视频。本地文件直接读取，不走联网、不申请网络权限，断网可用。
-- **本地素材库**：导入的视频跨会话保留，可反复生成，直到手动点「移除导入」；正在生成时禁止删除。
+- **本地素材库**：导入的视频跨会话保留，可反复生成。处理完后在来源卡片点「×」单独删除，或点「清空全部已导入视频」一次清空（正在生成的自动保留），也可在片段区点「移除导入」；删除会同时清掉视频文件。
 - **右键开始**：选中对应媒体并打开侧栏，也可通过工具栏扫描当前页面。
 - **选素材、选片段**：支持多个素材、同一素材的多个时间段，每段分别生成 GIF；默认选择全部时长。
 - **调整速度**：0.1–10×，提供常用倍速按钮，实时显示预计成品时长。
@@ -32,14 +32,14 @@ Chrome 侧栏扩展：既可以右键选择网页视频、GIF 或 WebP，也可�
 
 ## 安装
 
-1. 在 [Release](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.12) 下载 **`gif-toolkit-chrome-0.1.12.zip`**，解压到一个固定目录。
+1. 在 [Release](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.13) 下载 **`gif-toolkit-chrome-0.1.13.zip`**，解压到一个固定目录。
 2. 打开 `chrome://extensions`，启用右上角「开发者模式」。
 3. 点击「加载已解压的扩展程序」，选择解压后**包含 `manifest.json` 的目录**。
 4. 将 Gif Toolkit 固定到 Chrome 工具栏。
 
 GitHub 自动提供的 “Source code” 是开发源码，不能直接作为已构建扩展加载。想自己编译，请看 [开发指南](docs/DEVELOPMENT.md)。
 
-**升级**：将新版本解压到原扩展目录，在扩展管理页点击重载，刷新来源网页并重新打开侧栏，确认左上角版本与所安装的包一致（当前源码构建为 **0.1.12**）。不要删除扩展再安装，以免清除原有本地历史和已导入的本地视频。
+**升级**：将新版本解压到原扩展目录，在扩展管理页点击重载，刷新来源网页并重新打开侧栏，确认左上角版本与所安装的包一致（当前源码构建为 **0.1.13**）。不要删除扩展再安装，以免清除原有本地历史和已导入的本地视频。
 
 ## 三步生成
 
@@ -71,7 +71,7 @@ GIF / WebP 可先点击「读取动图，选择片段」。来自图片 CDN 的�
 
 | 场景 | 当前验证情况 |
 | --- | --- |
-| 本地视频批量导入（跨会话保留、移除导入） | 单元 / 契约测试通过，**真实 Chrome 人工验收待完成** |
+| 本地视频批量导入（跨会话保留、卡片删除、一键清空） | 本地真实 Chromium 端到端通过，**真实 Chrome 人工验收待完成** |
 | 普通横屏 / 竖屏视频，多个素材与片段 | 本地真实 Chromium 端到端通过 |
 | GIF、动态 WebP、透明 WebP | 真实转换及成品解码通过 |
 | 默认全时长、10 fps、倍速、丢帧、体积和尺寸约束 | UI、编码结果与历史恢复验证通过 |

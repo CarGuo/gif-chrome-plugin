@@ -59,6 +59,8 @@ jobs:
         run: npm run test:transports
       - name: Media and queue end-to-end tests
         run: npm run test:e2e
+      - name: Local video import and cleanup tests
+        run: npm run test:local
       # The download test consumes the real GIF produced by test:e2e.
       - name: Browser download and filename tests
         run: npm run test:download

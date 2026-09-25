@@ -316,6 +316,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'local-list':
         return getLocalSources();
+      case 'local-clear': {
+        const all = await getLocalSources();
+        const busyIds = new Set([...queue.map(job => job.source.id), ...(current ? [current.job.source.id] : [])]);
+        const remaining = all.filter(source => busyIds.has(source.id));
+        for (const source of all) if (!busyIds.has(source.id)) await removeLocalSource(source.id);
+        return remaining;
+      }
       case 'local-import': {
         const files = message.files;
         if (!Array.isArray(files) || !files.length || files.some(file => !(file instanceof File))) throw new TaskError('invalidSettings');
