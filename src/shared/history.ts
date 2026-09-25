@@ -1,4 +1,5 @@
 import { ERROR_CODES, httpOrigin, TaskError, validateOutputName, validateSettings, type HistoryProblem, type Job } from './model';
+import { isLocalSource } from './local-source';
 import { makeFilename } from './filename';
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object';
@@ -19,8 +20,13 @@ export function migrateJob(value: unknown): Job {
       !['queued', 'loading', 'downloading', 'estimating', 'capturing', 'encoding', 'optimizing', 'dropping', 'validating', 'completed', 'cancelled', 'failed'].includes(String(value.stage)) ||
       !nonnegative(value.progress) || value.progress > 1 ||
       (value.error !== undefined && !ERROR_CODES.includes(value.error as never))) throw Error();
-    httpOrigin(source.pageUrl as string);
-    if (source.mediaPageUrl !== undefined) httpOrigin(source.mediaPageUrl as string);
+    const job = value as unknown as Job;
+    if (isLocalSource(job.source)) {
+      if (job.source.kind !== 'video' || job.source.tabId !== -1) throw Error();
+    } else {
+      httpOrigin(source.pageUrl as string);
+      if (source.mediaPageUrl !== undefined) httpOrigin(source.mediaPageUrl as string);
+    }
     validateOutputName(source.title);
     if (value.stage === 'completed' && !object(value.result)) throw Error();
     if (value.result !== undefined) {
@@ -28,7 +34,6 @@ export function migrateJob(value: unknown): Job {
       if (!object(result) || !['bytes', 'width', 'height', 'duration', 'frames'].every(key => nonnegative(result[key])) ||
         (result.clearedAt !== undefined && !date(result.clearedAt))) throw Error();
     }
-    const job = value as unknown as Job;
     return { ...job, settings: validateSettings(job.settings), ...(job.result ? { result: { ...job.result, filename: makeFilename(job) } } : {}) };
   } catch { throw new TaskError('invalidHistory'); }
 }

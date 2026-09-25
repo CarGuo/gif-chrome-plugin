@@ -1,13 +1,13 @@
 # Encoder source distribution
 
-Gif Toolkit Chrome v0.1.11 distributes the **unmodified** ESM JavaScript and single-threaded WASM files from npm `@ffmpeg/core@0.12.10`. The JavaScript wrapper is `@ffmpeg/ffmpeg@0.12.15`. The wrapper's MIT license does not replace the GPL license of the compiled core.
+Gif Toolkit Chrome v0.1.12 distributes the **unmodified** ESM JavaScript and single-threaded WASM files from npm `@ffmpeg/core@0.12.10`. The JavaScript wrapper is `@ffmpeg/ffmpeg@0.12.15`. The wrapper's MIT license does not replace the GPL license of the compiled core.
 
 ## Download
 
-The packaging commands produce the following files in `artifacts/`. The tag workflow verifies and publishes both archives together when a version is released; the currently published package is on the [v0.1.11 release page](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.11).
+The packaging commands produce the following files in `artifacts/`. The tag workflow verifies and publishes both archives together when a version is released; the currently published package is on the [v0.1.12 release page](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.12).
 
-- `gif-toolkit-chrome-0.1.11.zip`: loadable extension with license texts and this source index.
-- `gif-toolkit-chrome-0.1.11-third-party-sources.zip`: encoder build source, FFmpeg and all 22 source archives listed in `sources.lock.json`, including Emscripten and its SDL2 port source, plus the Mediabunny sources.
+- `gif-toolkit-chrome-0.1.12.zip`: loadable extension with license texts and this source index.
+- `gif-toolkit-chrome-0.1.12-third-party-sources.zip`: encoder build source, FFmpeg and all 22 source archives listed in `sources.lock.json`, including Emscripten and its SDL2 port source, plus the Mediabunny sources.
 - `SHA256SUMS.txt`: SHA-256 checksums for both ZIP files. Each inner source archive also has its own SHA-256 in `sources.lock.json`.
 - GitHub's tag source archive supplies the extension's TypeScript/React source, tests, package lock, packaging scripts and these notices.
 

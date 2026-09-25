@@ -147,7 +147,7 @@ try {
   assert.equal(unreachable.stage, 'failed'); assert.equal(unreachable.error, 'budgetUnreachable');
   assert.equal(unreachable.result, undefined);
   assert.equal(await panel.evaluate(async id => {
-    const database = await new Promise(resolve => { const request = indexedDB.open('gif-toolkit', 1); request.onsuccess = () => resolve(request.result); });
+    const database = await new Promise(resolve => { const request = indexedDB.open('gif-toolkit'); request.onsuccess = () => resolve(request.result); });
     const saved = await new Promise(resolve => { const request = database.transaction('results').objectStore('results').get(id); request.onsuccess = () => resolve(request.result !== undefined); });
     database.close(); return saved;
   }, unreachable.id), false, 'an unreachable budget must not leave a saved oversized GIF');
@@ -212,7 +212,7 @@ try {
   const artifactJobs = [...completed, ...imageJobs, ...speedJobs, ...imageSpeedJobs, compressed, lastResort, ...editedAnimations];
   for (const job of artifactJobs) {
     const bytes = await panel.evaluate(async id => {
-      const database = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit', 1); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+      const database = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
       const blob = await new Promise((resolve, reject) => { const r = database.transaction('results').objectStore('results').get(id); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
       return [...new Uint8Array(await blob.arrayBuffer())];
     }, job.id);

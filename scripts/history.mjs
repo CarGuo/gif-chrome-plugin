@@ -33,7 +33,7 @@ const rpc = (type, data = {}, page = panel) => page.evaluate(async ({ type, data
   if (!response.ok) throw Error(response.error); return response.data;
 }, { type, data });
 const seed = (jobs, orphan = false) => panel.evaluate(async ({ jobs, bytes, orphan }) => {
-  const database = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit', 1); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+  const database = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
   await new Promise((resolve, reject) => {
     const tx = database.transaction(['jobs', 'results'], 'readwrite');
     for (const job of jobs) {

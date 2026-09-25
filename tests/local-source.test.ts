@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { acquisition, mediaOrigins } from '../src/shared/acquisition';
 import { POLICY, type MediaSource } from '../src/shared/model';
 import { createLocalSource, isLocalSource, LOCAL_PAGE_URL } from '../src/shared/local-source';
+import { migrateJob } from '../src/shared/history';
 
 const meta = { width: 1280, height: 720, duration: 12.5 };
 const file = (name = 'clip.mp4', size = 1024) => new File([new Uint8Array(size)], name, { type: 'video/mp4' });
@@ -47,5 +48,19 @@ describe('local video sources', () => {
     const web = { kind: 'video', local: false, url: 'https://cdn.test/a.mp4', pageUrl: 'https://page.test/' } as MediaSource;
     expect(isLocalSource(web)).toBe(false);
     expect(acquisition(web)).toBe('download');
+  });
+
+  it('survives history validation instead of being flagged as a damaged record', () => {
+    const source = createLocalSource(file('History Clip.mp4'), meta);
+    const record = {
+      id: crypto.randomUUID(), source, segment: { id: crypto.randomUUID(), start: 0, end: 12.5 },
+      settings: { maxBytes: 4000000, maxSide: 800, fps: 10, speed: 1, dropFrames: 'none' },
+      stage: 'completed', progress: 1, createdAt: 1000, updatedAt: 1000,
+      result: { bytes: 100, width: 1280, height: 720, duration: 12.5, frames: 125, filename: 'x.gif' },
+    };
+    const migrated = migrateJob(record);
+    expect(migrated.source.id).toBe(source.id);
+    expect(isLocalSource(migrated.source)).toBe(true);
+    expect(migrated.result?.filename).toContain('.gif');
   });
 });

@@ -109,7 +109,7 @@ try {
   assert.equal(completed.find(job => job.id === ids[1]).stage, 'completed');
   assert.equal((await rpc('history')).problems.length, 1);
   const raw = await panel.evaluate(async id => {
-    const database = await new Promise(resolve => { const r = indexedDB.open('gif-toolkit', 1); r.onsuccess = () => resolve(r.result); });
+    const database = await new Promise(resolve => { const r = indexedDB.open('gif-toolkit'); r.onsuccess = () => resolve(r.result); });
     const value = await new Promise(resolve => { const r = database.transaction('jobs').objectStore('jobs').get(id); r.onsuccess = () => resolve(r.result); }); database.close(); return value;
   }, broken.id);
   assert.deepEqual(raw, broken);

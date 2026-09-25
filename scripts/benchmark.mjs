@@ -89,7 +89,7 @@ try {
   assert.equal(job.stage, 'completed', JSON.stringify({ stage: job.stage, error: job.error, metrics: job.metrics }));
   assert.equal(await page.locator('video').getAttribute('data-seeks'), '0', 'downloaded sources must never seek the page player');
   const data = await panel.evaluate(async id => {
-    const database = await new Promise(resolve => { const r = indexedDB.open('gif-toolkit', 1); r.onsuccess = () => resolve(r.result); });
+    const database = await new Promise(resolve => { const r = indexedDB.open('gif-toolkit'); r.onsuccess = () => resolve(r.result); });
     const blob = await new Promise(resolve => { const r = database.transaction('results').objectStore('results').get(id); r.onsuccess = () => resolve(r.result); });
     return [...new Uint8Array(await blob.arrayBuffer())];
   }, jobId);

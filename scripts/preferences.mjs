@@ -69,7 +69,7 @@ try {
   assert.equal(await panel.getByRole('spinbutton', { name: texts.speed, exact: true }).inputValue(), '2');
   // v0.1.4: evicting old results must also remove their cards while the panel stays open.
   await panel.evaluate(async () => {
-    const database = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit', 1); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+    const database = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
     const template = (await chrome.runtime.sendMessage({ target: 'background', type: 'list' })).data[0];
     await new Promise((resolve, reject) => {
       const tx = database.transaction('jobs', 'readwrite');

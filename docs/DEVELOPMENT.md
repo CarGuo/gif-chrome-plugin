@@ -59,7 +59,8 @@ src/
   worker-client.ts       工作线程生命周期、可取消的 Gifsicle 优化
   shared/
     model.ts             默认值、资源策略、参数和范围校验
-    acquisition.ts       下载路径、X 公开媒体身份、来源权限
+    acquisition.ts       下载路径、本地来源、X 公开媒体身份、来源权限
+    local-source.ts      本地来源的唯一构造器与识别标记
     download.ts          有界可取消下载与公开媒体解析
     fit.ts               时间轴抽样、尺寸估算、实测反馈和最后降帧
     encoding.ts          FFmpeg 参数、GIF 成品验证
@@ -67,7 +68,7 @@ src/
     filename.ts          统一的可保存文件名
     preferences.ts       向后兼容的设置迁移
     sources.ts           来源身份、动画元数据与片段初始化
-    storage.ts           IndexedDB 历史与 Blob
+    storage.ts           IndexedDB 历史、Blob 与本地素材仓库
   ui/                    React 侧栏、交互、Chrome i18n 封装
   locales/               英文 / 简体中文资源
 ```
@@ -76,7 +77,7 @@ src/
 
 ```mermaid
 flowchart TD
-  A[右键 / 工具栏选择] --> B[校验来源并下载完整媒体]
+  A[右键 / 工具栏选择 / 批量导入本地视频] --> B[校验来源并取得完整媒体：下载网页视频或读取本地文件]
   B --> C[工作线程解码 / 建立倍速时间轴]
   C --> D[代表性样本估算尺寸]
   D --> E[缩放并采样完整选区]
@@ -90,7 +91,7 @@ flowchart TD
   H -->|达标| K[校验完整时间轴并保存]
 ```
 
-下载的视频由 Mediabunny / WebCodecs 在 Worker 解码，图片解码、帧摘要、调色板、GIF 编码和 Gifsicle 优化也在 Worker 执行。0.1.7 删除页面取帧路径。`download-worker.ts` 负责 HLS/DASH 解复用、合并和 SABR 协议处理；`page-observer.js` 在 MAIN 观察媒体请求元数据，识别 MSE、文件 Blob 与播放器会话。跨域内嵌播放器需先取得对应 frame 的访问权。Offscreen 页面按队列顺序处理，避免同时创建多个大型 WASM 实例。侧栏关闭不终止队列。
+本地导入的视频不经过网络和页面，导入时在离屏文档探测元数据，字节存入 IndexedDB 的 `localFiles` 仓库、元数据存入 `localSources` 仓库；处理时直接按来源 ID 读取文件。下载的网页视频由 Mediabunny / WebCodecs 在 Worker 解码，图片解码、帧摘要、调色板、GIF 编码和 Gifsicle 优化也在 Worker 执行。0.1.7 删除页面取帧路径。`download-worker.ts` 负责 HLS/DASH 解复用、合并和 SABR 协议处理；`page-observer.js` 在 MAIN 观察媒体请求元数据，识别 MSE、文件 Blob 与播放器会话。跨域内嵌播放器需先取得对应 frame 的访问权。Offscreen 页面按队列顺序处理，避免同时创建多个大型 WASM 实例。侧栏关闭不终止队列。
 
 ## 必须保持的约定
 

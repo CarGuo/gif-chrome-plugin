@@ -47,7 +47,7 @@ try {
   }
   async function bytes(job) {
     return Uint8Array.from(await panel.evaluate(async id => {
-      const db = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit', 1); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+      const db = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
       const blob = await new Promise((resolve, reject) => { const r = db.transaction('results').objectStore('results').get(id); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
       db.close(); return [...new Uint8Array(await blob.arrayBuffer())];
     }, job.id));

@@ -19,7 +19,7 @@ try {
   const panel = await context.newPage(); await panel.goto(`chrome-extension://${id}/panel.html`);
   const result = await panel.evaluate(async ({ bytes, item }) => {
     const initialized = await chrome.runtime.sendMessage({ target: 'background', type: 'list' }); if (!initialized.ok) throw Error(initialized.error);
-    const database = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit', 1); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+    const database = await new Promise((resolve, reject) => { const r = indexedDB.open('gif-toolkit'); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
     const id = crypto.randomUUID();
     await new Promise((resolve, reject) => { const tx = database.transaction(['jobs', 'results'], 'readwrite');
       tx.objectStore('jobs').put({ id, stage: 'completed', progress: 1, createdAt: Date.now(), updatedAt: Date.now(),
