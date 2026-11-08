@@ -1,5 +1,5 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { buildEncodeArgs, buildFrameHashArgs, buildPaletteArgs, inspectGif, type Candidate } from './shared/encoding';
+import { buildEncodeArgs, buildFrameHashArgs, buildFramesToVideoArgs, buildPaletteArgs, buildVideoClipArgs, buildVideoCopyArgs, inspectGif, type Candidate } from './shared/encoding';
 import { planDroppedFrames, readFrameHashes, type FramePlan } from './shared/frame-plan';
 import { estimateSize, lastResortFps, nextDimensions, nextLossy, predictedDimensions, probeIndices } from './shared/fit';
 import { chosenResource } from './shared/media-resource';
@@ -9,11 +9,13 @@ import { downloadSource } from './shared/download';
 import { createLocalSource, isLocalSource } from './shared/local-source';
 import { errorCode, fitDimensions, isTerminal, outputDuration, sampleCount, sampleTime, POLICY, rpc, TaskError, validateSegment, validateWorkload, type DropFrames, type Job, type MediaSource, type Reply } from './shared/model';
 import { makeFilename } from './shared/filename';
+import { createStreamRegionRecorder, type ActiveStreamRecorder } from './shared/region-recorder';
 import { clearStoredItems, deleteResult, getCacheSummary, getHistory, getJob, getJobs, getLocalFile, getLocalSources, getResult, pruneHistory, removeJob, removeLocalSource, saveJob, saveJobs, saveLocalFile, saveLocalSource, saveResult } from './shared/storage';
 import { optimizeGif, WorkerClient } from './worker-client';
 
 const queue: Job[] = [];
 let current: { job: Job; abort: AbortController; ffmpeg: FFmpeg; image?: WorkerClient; video?: WorkerClient; download?: WorkerClient } | undefined;
+let tabRecorder: ActiveStreamRecorder | undefined;
 let pumping = false;
 let admission: Promise<unknown> = Promise.resolve();
 // v0.1.9: each browser download owns its URL until completion. Clearing the backing
@@ -89,12 +91,13 @@ async function processJob(job: Job) {
     ({ width, height, duration } = meta); staticImage = meta.frames === 1;
     // v0.1.8: the downloaded representation owns processing metadata. Full-source
     // intent resolves to its end; manual timestamps remain unchanged and strictly checked.
-    const segment = validateSegment(job.segment, duration, job.settings.fps, job.settings.speed); check();
+    const format = job.format ?? 'gif';
+    const segment = validateSegment(job.segment, duration, job.settings.fps, job.settings.speed, format); check();
     await update(job, { source: { ...job.source, width, height, duration }, segment });
     const clipDuration = outputDuration(job.segment, job.settings.speed);
     const count = staticImage ? 1 : sampleCount(job.segment, job.settings.fps, job.settings.speed);
     const base = fitDimensions(width, height, job.settings.maxSide);
-    validateWorkload(base.width, base.height, count);
+    if (format === 'gif') validateWorkload(base.width, base.height, count);
     await ffmpeg.load({ coreURL: chrome.runtime.getURL('ffmpeg/ffmpeg-core.js'), wasmURL: chrome.runtime.getURL('ffmpeg/ffmpeg-core.wasm') }); check();
 
     const files = new Set<string>();
@@ -187,6 +190,78 @@ async function processJob(job: Job) {
       return best;
     }
 
+    if (format === 'video') {
+      const encodeStarted = performance.now();
+      if (job.source.kind === 'video') {
+        await ffmpeg.writeFile('input.media', new Uint8Array(await blob.arrayBuffer()));
+        check();
+        await update(job, { stage: 'encoding', progress: 0.45 });
+        let code = -1;
+        const isFullUnchanged = segment.start <= 0.01 &&
+          (segment.endMode === 'source' || (duration !== null && Math.abs(segment.end - duration) <= 0.05)) &&
+          job.settings.speed === 1 && Math.max(width, height) <= job.settings.maxSide;
+        if (isFullUnchanged) {
+          code = await ffmpeg.exec(buildVideoCopyArgs('input.media', 'output.mp4'), 90_000);
+          await progressWrites; if (progressFailure) throw progressFailure.error; check();
+        }
+        if (code !== 0) {
+          code = await ffmpeg.exec(buildVideoClipArgs('input.media', 'output.mp4', segment, job.settings.speed, job.settings.maxSide, width, height, job.settings.speed === 1), 90_000);
+          await progressWrites; if (progressFailure) throw progressFailure.error; check();
+        }
+        if (code !== 0 && job.settings.speed === 1) {
+          code = await ffmpeg.exec(buildVideoClipArgs('input.media', 'output.mp4', segment, job.settings.speed, job.settings.maxSide, width, height, false), 90_000);
+          await progressWrites; if (progressFailure) throw progressFailure.error; check();
+        }
+        await ffmpeg.deleteFile('input.media').catch(() => {});
+        if (code !== 0) {
+          validateWorkload(base.width, base.height, count);
+          await update(job, { stage: 'capturing', progress: 0.25 });
+          await capture(Array.from({ length: count }, (_, i) => i), Math.max(base.width, base.height), 'frame');
+          await update(job, { stage: 'encoding', progress: 0.58 });
+          await exec(buildFramesToVideoArgs({ ...base, fps: job.settings.fps }, job.settings.fps, 'frame%05d.png', 'output.mp4'));
+          await clearFrames();
+        }
+        state.video?.close(); state.video = undefined;
+      } else {
+        validateWorkload(base.width, base.height, count);
+        await update(job, { stage: 'capturing', progress: 0.25 });
+        await capture(Array.from({ length: count }, (_, i) => i), Math.max(base.width, base.height), 'frame');
+        state.image?.close(); state.image = undefined;
+        await update(job, { stage: 'encoding', progress: 0.58 });
+        await exec(buildFramesToVideoArgs({ ...base, fps: job.settings.fps }, job.settings.fps, 'frame%05d.png', 'output.mp4'));
+        await clearFrames();
+      }
+      metrics.encodeMs = performance.now() - encodeStarted; metrics.encodes = 1;
+      const videoBytes = await ffmpeg.readFile('output.mp4');
+      await ffmpeg.deleteFile('output.mp4').catch(() => {});
+      if (!(videoBytes instanceof Uint8Array) || !videoBytes.length) throw new TaskError('invalidOutput');
+      await update(job, { stage: 'validating', progress: 0.95 });
+      const outBlob = new Blob([videoBytes.slice().buffer as ArrayBuffer], { type: 'video/mp4' });
+      const verifier = videoClient();
+      let verified: { width: number; height: number; duration: number };
+      try {
+        verified = await verifier.request<{ width: number; height: number; duration: number }>('open', { blob: outBlob });
+      } finally { verifier.close(); }
+      check();
+      await saveResult(job.id, outBlob);
+      check(); metrics.totalMs = performance.now() - started;
+      await update(job, {
+        stage: 'completed',
+        progress: 1,
+        metrics,
+        result: {
+          bytes: outBlob.size,
+          width: verified.width,
+          height: verified.height,
+          duration: verified.duration,
+          frames: Math.max(1, Math.round(verified.duration * job.settings.fps)),
+          filename: makeFilename(job),
+        },
+      });
+      if (job.autoDownload) void rpc({ target: 'background', type: 'download', id: job.id, saveAs: false }).catch(() => {});
+      return;
+    }
+
     await update(job, { stage: 'estimating', progress: 0.17 });
     const probeStarted = performance.now();
     const indices = probeIndices(count);
@@ -251,6 +326,7 @@ async function processJob(job: Job) {
     await saveResult(job.id, new Blob([result!.bytes.slice().buffer as ArrayBuffer], { type: 'image/gif' }));
     check(); metrics.totalMs = performance.now() - started;
     await update(job, { stage: 'completed', progress: 1, metrics, result: { ...metadata, filename: makeFilename(job) } });
+    if (job.autoDownload) void rpc({ target: 'background', type: 'download', id: job.id, saveAs: false }).catch(() => {});
   } catch (error) {
     const code = abort.signal.aborted ? 'cancelled' : errorCode(error);
     await deleteResult(job.id); metrics.totalMs = performance.now() - started;
@@ -325,9 +401,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'local-import': {
         const files = message.files;
-        if (!Array.isArray(files) || !files.length || files.some(file => !(file instanceof File))) throw new TaskError('invalidSettings');
+        if (!Array.isArray(files) || !files.length || files.some(file => !(file instanceof Blob))) throw new TaskError('invalidSettings');
         const imported: MediaSource[] = [];
-        for (const file of files) {
+        for (const raw of files) {
+          const file = raw instanceof File ? raw : new File([raw], (raw as { name?: string }).name || 'video.mp4', { type: raw.type || 'video/mp4' });
           const worker = videoClient();
           try {
             const meta = await worker.request<{ width: number; height: number; duration: number }>('open', { blob: file });
@@ -338,6 +415,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           } finally { worker.close(); }
         }
         return imported;
+      }
+      case 'start-tab-recording': {
+        tabRecorder?.cancel();
+        tabRecorder = undefined;
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: message.streamId } } as unknown as MediaTrackConstraints,
+        });
+        tabRecorder = await createStreamRegionRecorder(stream, message.region, () => {
+          tabRecorder = undefined;
+          void chrome.runtime.sendMessage({ target: 'background', type: 'recording-cancelled' }).catch(() => {});
+        });
+        return { startedAt: Date.now() };
+      }
+      case 'stop-tab-recording': {
+        const active = tabRecorder;
+        tabRecorder = undefined;
+        if (!active) return null;
+        return active.stop();
+      }
+      case 'cancel-tab-recording': {
+        tabRecorder?.cancel();
+        tabRecorder = undefined;
+        return null;
       }
       case 'local-remove': {
         const id = message.id;

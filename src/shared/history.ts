@@ -18,6 +18,7 @@ export function migrateJob(value: unknown): Job {
       !(source.duration === null || nonnegative(source.duration)) || !date(value.createdAt) || !date(value.updatedAt) ||
       !nonnegative(segment.start) || !nonnegative(segment.end) ||
       !['queued', 'loading', 'downloading', 'estimating', 'capturing', 'encoding', 'optimizing', 'dropping', 'validating', 'completed', 'cancelled', 'failed'].includes(String(value.stage)) ||
+      (value.format !== undefined && !['gif', 'video'].includes(String(value.format))) ||
       !nonnegative(value.progress) || value.progress > 1 ||
       (value.error !== undefined && !ERROR_CODES.includes(value.error as never))) throw Error();
     const job = value as unknown as Job;

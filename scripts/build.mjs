@@ -19,7 +19,7 @@ const manifest = {
   minimum_chrome_version: '148', default_locale: 'en',
   // v0.1: frame blobs use bounded structured messages; JSON would silently destroy Blob data.
   message_serialization: 'structured_clone',
-  permissions: ['contextMenus', 'activeTab', 'scripting', 'sidePanel', 'storage', 'downloads', 'offscreen'],
+  permissions: ['contextMenus', 'activeTab', 'tabCapture', 'scripting', 'sidePanel', 'storage', 'downloads', 'offscreen'],
   optional_host_permissions: ['http://*/*', 'https://*/*'],
   action: { default_title: '__MSG_appName__' },
   background: { service_worker: 'background.js', type: 'module' },

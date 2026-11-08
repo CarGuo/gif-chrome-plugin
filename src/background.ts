@@ -1,4 +1,4 @@
-import { errorCode, hasResult, httpOrigin, isTerminal, POLICY, prepareSegment, TaskError, validateOutputName, validateSettings, type DownloadBatchResult, type Job, type MediaSource, type Reply } from './shared/model';
+import { defaultSegment, errorCode, EXPORT_FORMATS, hasResult, httpOrigin, isTerminal, POLICY, prepareSegment, TaskError, validateOutputName, validateSettings, type DownloadBatchResult, type ExportFormat, type Job, type MediaSource, type RecordingState, type RegionRect, type Reply } from './shared/model';
 import { parseDownloadSelection } from './shared/download-selection';
 import { distinctSourceTitles, retainImageMetadata, sameSource, withImageMetadata } from './shared/sources';
 import { isLocalSource } from './shared/local-source';
@@ -8,6 +8,7 @@ import { installPageObserver, readPageMedia, type YoutubeSession } from './share
 import { attachResources, youtubeId } from './shared/media-resource';
 
 const isExtension = (sender: chrome.runtime.MessageSender) => sender.id === chrome.runtime.id && sender.url?.startsWith(chrome.runtime.getURL(''));
+const isContentSender = (sender: chrome.runtime.MessageSender) => sender.id === chrome.runtime.id && Number.isInteger(sender.tab?.id);
 let creating: Promise<void> | undefined;
 async function ensureProcessor() {
   // v0.1.7: a context becomes visible before its initial module has loaded. Queue the
@@ -15,7 +16,7 @@ async function ensureProcessor() {
   // for the same completed page load instead of messaging a half-created processor.
   if (!creating) creating = (async () => {
     if ((await chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT] })).length) return;
-    await chrome.offscreen.createDocument({ url: 'offscreen.html', reasons: [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.BLOBS], justification: 'Decode animation frames and encode GIFs locally without blocking the page.' });
+    await chrome.offscreen.createDocument({ url: 'offscreen.html', reasons: [chrome.offscreen.Reason.WORKERS, chrome.offscreen.Reason.BLOBS, chrome.offscreen.Reason.USER_MEDIA], justification: 'Decode animation frames, record selected tab regions and encode GIFs/videos locally without blocking the page.' });
   })().finally(() => { creating = undefined; });
   await creating;
 }
@@ -66,10 +67,129 @@ async function scan(tabId: number, focus?: { frameId?: number; srcUrl?: string; 
   await chrome.storage.session.set({ activeTabId: tabId, activePageUrl: frames.find(frame => frame.frameId === 0)?.result?.page, missingFrameOrigins, sources, scanError: null });
   return sources;
 }
+async function resolveTargetTabId(preferredTabId?: number): Promise<number> {
+  if (Number.isInteger(preferredTabId)) return preferredTabId!;
+  const session = await chrome.storage.session.get('activeTabId');
+  if (Number.isInteger(session.activeTabId)) return session.activeTabId;
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!Number.isInteger(tab?.id)) throw new TaskError('pageUnavailable');
+  return tab.id!;
+}
+async function cancelRecording() {
+  const { recordingState, recordingMode } = await chrome.storage.session.get(['recordingState', 'recordingMode']);
+  if (recordingMode === 'tab') await processor('cancel-tab-recording').catch(() => {});
+  if (Number.isInteger(recordingState?.tabId)) {
+    await chrome.tabs.sendMessage(recordingState.tabId, { target: 'content', type: 'cancel-recording' }, { frameId: 0 }).catch(() => {});
+  }
+  await chrome.storage.session.set({ recordingState: { stage: 'idle' } satisfies RecordingState, recordingMode: null });
+  return { stage: 'idle' } satisfies RecordingState;
+}
+async function startRegionSelect(preferredTabId?: number, initialRegion?: RegionRect): Promise<RecordingState> {
+  const tabId = await resolveTargetTabId(preferredTabId);
+  await cancelRecording();
+  await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content.js'] }).catch(() => { throw new TaskError('pageUnavailable'); });
+  const reply: Reply<{ region: RegionRect | null; title: string }> = await chrome.tabs.sendMessage(
+    tabId,
+    { target: 'content', type: 'start-region-select', region: initialRegion },
+    { frameId: 0 }
+  ).catch(() => { throw new TaskError('pageUnavailable'); });
+  if (!reply?.ok) throw new TaskError(reply?.error ?? 'pageUnavailable');
+  const state: RecordingState = {
+    stage: reply.data.region ? 'selected' : 'selecting',
+    tabId,
+    region: reply.data.region ?? undefined,
+    title: reply.data.title,
+  };
+  await chrome.storage.session.set({ activeTabId: tabId, recordingState: state, recordingMode: null });
+  return state;
+}
+async function startRecording(preferredTabId?: number, nextRegion?: RegionRect, pageTitle?: string): Promise<RecordingState> {
+  const session = await chrome.storage.session.get(['recordingState']);
+  const current: RecordingState = session.recordingState ?? { stage: 'idle' };
+  if (current.stage === 'starting' || current.stage === 'stopping' || current.stage === 'recording') return current;
+  const tabId = preferredTabId ?? current.tabId ?? await resolveTargetTabId();
+  const region = nextRegion ?? current.region;
+  if (!region || region.width < 16 || region.height < 16) throw new TaskError('invalidSegment');
+  const title = pageTitle ?? current.title;
+  await chrome.storage.session.set({ recordingState: { stage: 'starting', tabId, region, title } satisfies RecordingState });
+  try {
+    try {
+      const streamId = await new Promise<string>((resolve, reject) => {
+        chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+          const err = chrome.runtime.lastError;
+          if (err || !id) reject(new Error(err?.message ?? 'tabCapture unavailable'));
+          else resolve(id);
+        });
+      });
+      const { startedAt } = await processor<{ startedAt: number }>('start-tab-recording', { streamId, region });
+      await chrome.tabs.sendMessage(tabId, { target: 'content', type: 'set-recording-ui', startedAt, region }, { frameId: 0 }).catch(() => {});
+      const state: RecordingState = { stage: 'recording', tabId, region, startedAt, title };
+      await chrome.storage.session.set({ recordingState: state, recordingMode: 'tab' });
+      return state;
+    } catch {
+      const reply: Reply<{ startedAt: number; region: RegionRect }> = await chrome.tabs.sendMessage(
+        tabId,
+        { target: 'content', type: 'start-page-capture', region },
+        { frameId: 0 }
+      ).catch(() => { throw new TaskError('pageUnavailable'); });
+      if (!reply?.ok) throw new TaskError(reply?.error ?? 'cancelled');
+      const state: RecordingState = { stage: 'recording', tabId, region: reply.data.region, startedAt: reply.data.startedAt, title };
+      await chrome.storage.session.set({ recordingState: state, recordingMode: 'page' });
+      return state;
+    }
+  } catch (error) {
+    await chrome.storage.session.set({ recordingState: { stage: 'selected', tabId, region, title } satisfies RecordingState, recordingMode: null });
+    throw error;
+  }
+}
+async function stopRecording(format: ExportFormat = 'gif', pageTitle?: string) {
+  if (!EXPORT_FORMATS.includes(format)) throw new TaskError('invalidSettings');
+  const { recordingState, recordingMode } = await chrome.storage.session.get(['recordingState', 'recordingMode']);
+  const current: RecordingState | undefined = recordingState;
+  if (!current || current.stage !== 'recording' || !Number.isInteger(current.tabId)) throw new TaskError('sourceNotReady');
+  await chrome.storage.session.set({ recordingState: { ...current, stage: 'stopping' } satisfies RecordingState });
+  let blob: Blob | null = null;
+  try {
+    if (recordingMode === 'tab') {
+      blob = await processor<Blob | null>('stop-tab-recording');
+      await chrome.tabs.sendMessage(current.tabId!, { target: 'content', type: 'cancel-recording' }, { frameId: 0 }).catch(() => {});
+    } else {
+      const reply: Reply<Blob | null> = await chrome.tabs.sendMessage(current.tabId!, { target: 'content', type: 'stop-page-capture' }, { frameId: 0 })
+        .catch(() => { throw new TaskError('pageUnavailable'); });
+      if (!reply?.ok) throw new TaskError(reply?.error ?? 'encodingFailed');
+      blob = reply.data;
+    }
+  } finally {
+    await chrome.storage.session.set({ recordingState: { stage: 'idle' } satisfies RecordingState, recordingMode: null });
+  }
+  if (!blob || !blob.size) throw new TaskError('invalidOutput');
+  const rawTitle = (pageTitle || current.title || 'Page').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Page';
+  const recTitle = validateOutputName(chrome.i18n.getMessage('recordDefaultTitle', [rawTitle]) || `Recording · ${rawTitle}`);
+  const file = new File([blob], `${recTitle}.mp4`, { type: blob.type || 'video/mp4' });
+  const [source] = await processor<MediaSource[]>('local-import', { files: [file] });
+  const settings = await loadPreferences();
+  const segment = prepareSegment(defaultSegment(source), source, settings.fps, settings.speed, format);
+  const job: Job = {
+    id: crypto.randomUUID(),
+    source: { ...source, title: recTitle },
+    segment,
+    settings,
+    ...(format === 'video' ? { format } : {}),
+    autoDownload: true,
+    stage: 'queued',
+    progress: 0,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  await processor('enqueue', { jobs: [job] });
+  void chrome.runtime.sendMessage({ type: 'local-sources-updated' }).catch(() => {});
+  return { source, jobId: job.id };
+}
 async function rebuildMenu() {
   await chrome.contextMenus.removeAll();
   chrome.contextMenus.create({ id: 'gif-create', title: chrome.i18n.getMessage('menuCreate'), contexts: ['video', 'image'] });
   chrome.contextMenus.create({ id: 'gif-scan', title: chrome.i18n.getMessage('menuScan'), contexts: ['page', 'frame'] });
+  chrome.contextMenus.create({ id: 'gif-record', title: chrome.i18n.getMessage('menuRecordRegion'), contexts: ['page', 'frame', 'video', 'image'] });
 }
 chrome.runtime.onInstalled.addListener(() => {
   void rebuildMenu(); void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
@@ -92,6 +212,10 @@ chrome.action.onClicked.addListener(tab => {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
   void chrome.sidePanel.open({ tabId: tab.id });
+  if (info.menuItemId === 'gif-record') {
+    void startRegionSelect(tab.id).catch(() => chrome.storage.session.set({ scanError: 'pageUnavailable' }));
+    return;
+  }
   void (async () => {
     const sources = await scan(tab.id!, { frameId: info.frameId, srcUrl: info.srcUrl, mediaType: info.mediaType });
     if (info.srcUrl && !sources.some(s => s.selected)) {
@@ -103,7 +227,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status !== 'loading') return;
-  void chrome.storage.session.get('activeTabId').then(s => {
+  void chrome.storage.session.get(['activeTabId', 'recordingState']).then(s => {
+    if (s.recordingState?.tabId === tabId && s.recordingState.stage !== 'idle') void cancelRecording();
     if (s.activeTabId === tabId) return chrome.storage.session.set({ sources: [], scanError: 'sourceChanged' });
   });
 });
@@ -118,10 +243,32 @@ chrome.downloads.onChanged.addListener(delta => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.target !== 'background' || sender.id !== chrome.runtime.id) return;
   const handle = async () => {
-    if (!isExtension(sender)) throw new TaskError('permissionRequired');
+    const contentAllowed = ['region-updated', 'recording-reselect', 'recording-cancelled', 'start-recording', 'stop-recording'].includes(message.type);
+    if (!isExtension(sender) && !(contentAllowed && isContentSender(sender))) throw new TaskError('permissionRequired');
     switch (message.type) {
       case 'load-preferences': return loadPreferences();
       case 'save-preferences': await savePreferences(message.settings); return null;
+      case 'start-region-select': return startRegionSelect(message.tabId, message.region);
+      case 'region-updated': {
+        const current = (await chrome.storage.session.get('recordingState')).recordingState as RecordingState | undefined;
+        const tabId = sender.tab?.id ?? current?.tabId;
+        const state: RecordingState = { stage: 'selected', tabId, region: message.region, title: message.title ?? current?.title };
+        await chrome.storage.session.set({ recordingState: state });
+        return state;
+      }
+      case 'recording-reselect': {
+        const current = (await chrome.storage.session.get('recordingState')).recordingState as RecordingState | undefined;
+        const state: RecordingState = { stage: 'selecting', tabId: sender.tab?.id ?? current?.tabId, title: current?.title };
+        await chrome.storage.session.set({ recordingState: state });
+        return state;
+      }
+      case 'recording-cancelled':
+      case 'cancel-recording':
+        return cancelRecording();
+      case 'start-recording':
+        return startRecording(sender.tab?.id ?? message.tabId, message.region, message.title);
+      case 'stop-recording':
+        return stopRecording(message.format ?? 'gif', message.title);
       case 'scan': {
         let tabId = message.tabId;
         if (!Number.isInteger(tabId)) {
@@ -137,7 +284,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'clear-history': return processor('clear-history', { ids: message.ids });
       case 'enqueue': {
         if (!Array.isArray(message.items) || !message.items.length || message.items.length > POLICY.maxJobs) throw new TaskError('invalidSegment');
-        const jobs: Job[] = message.items.map((item: { source: MediaSource; segment: Job['segment']; settings: Job['settings'] }) => {
+        const jobs: Job[] = message.items.map((item: { source: MediaSource; segment: Job['segment']; settings: Job['settings']; format?: ExportFormat; autoDownload?: boolean }) => {
+          const format: ExportFormat = item.format ?? message.format ?? 'gif';
+          if (!EXPORT_FORMATS.includes(format)) throw new TaskError('invalidSettings');
           const settings = validateSettings(item.settings); const source = item.source;
           if (!source || !source.documentKey || !source.id || !['video', 'gif', 'webp', 'image'].includes(source.kind)) throw new TaskError('sourceGone');
           // Picked files have no tab or web origin; everything else must still identify both.
@@ -148,8 +297,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             httpOrigin(source.pageUrl);
           }
           source.title = validateOutputName(source.title);
-          const segment = prepareSegment(item.segment, source, settings.fps, settings.speed);
+          const segment = prepareSegment(item.segment, source, settings.fps, settings.speed, format);
           return { id: crypto.randomUUID(), source, segment, settings,
+            ...(format === 'video' ? { format } : {}),
+            ...(item.autoDownload ? { autoDownload: true } : {}),
             stage: 'queued', progress: 0, createdAt: Date.now(), updatedAt: Date.now() };
         });
         return processor('enqueue', { jobs });

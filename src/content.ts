@@ -2,6 +2,7 @@ import { downloadBlob } from './shared/download';
 import { TaskError, errorCode, POLICY, type MediaSource, type Reply } from './shared/model';
 import { contextTarget } from './shared/context-target';
 import { mediaTitle } from './shared/media-title';
+import { createPageRegionController } from './shared/region-recorder';
 
 declare global { interface Window { __gifToolkitLoaded?: boolean } }
 if (!window.__gifToolkitLoaded) {
@@ -11,10 +12,11 @@ if (!window.__gifToolkitLoaded) {
   const elements = new Map<string, HTMLVideoElement | HTMLImageElement>();
   let rightTarget: Element | undefined;
   const reads = new Map<string, AbortController>();
+  const regionController = window === window.top ? createPageRegionController() : null;
 
   function mediaElements(root: Document | ShadowRoot): (HTMLVideoElement | HTMLImageElement)[] {
-    const media = [...root.querySelectorAll<HTMLVideoElement | HTMLImageElement>('video,img')];
-    for (const el of root.querySelectorAll('*')) if (el.shadowRoot) media.push(...mediaElements(el.shadowRoot));
+    const media = [...root.querySelectorAll<HTMLVideoElement | HTMLImageElement>('video,img')].filter(el => !el.dataset.gifToolkitIgnore);
+    for (const el of root.querySelectorAll('*')) if (el.shadowRoot && !(el as HTMLElement).dataset?.gifToolkitIgnore) media.push(...mediaElements(el.shadowRoot));
     return media;
   }
   function kindOf(el: HTMLVideoElement | HTMLImageElement) {
@@ -81,6 +83,27 @@ if (!window.__gifToolkitLoaded) {
   async function handle(message: Record<string, any>) {
     if (message.type === 'scan') return scan(message.focus);
     if (message.type === 'cancel-read') { reads.get(message.token)?.abort(); return null; }
+    if (message.type === 'start-region-select') {
+      if (!regionController) throw new TaskError('pageUnavailable');
+      return { region: regionController.startSelect(message.region), title: document.title || location.hostname || 'Page' };
+    }
+    if (message.type === 'set-recording-ui') {
+      if (!regionController) throw new TaskError('pageUnavailable');
+      regionController.setRecordingUI(message.startedAt ?? Date.now(), message.region);
+      return null;
+    }
+    if (message.type === 'start-page-capture') {
+      if (!regionController) throw new TaskError('pageUnavailable');
+      return regionController.startPageCapture(message.region);
+    }
+    if (message.type === 'stop-page-capture') {
+      if (!regionController) throw new TaskError('pageUnavailable');
+      return regionController.stopPageCapture();
+    }
+    if (message.type === 'cancel-recording') {
+      regionController?.cancel();
+      return null;
+    }
     const video = selectedVideo(message);
     if (message.type === 'inspect') return { width: video.videoWidth, height: video.videoHeight, duration: video.duration };
     if (message.type === 'read-blob' || message.type === 'read-sabr') {

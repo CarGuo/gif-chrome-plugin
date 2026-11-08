@@ -25,12 +25,18 @@ export interface MediaSource {
 export interface Segment { id: string; start: number; end: number; endMode?: 'time' | 'source' }
 export const DROP_FRAME_MODES = ['none', 'duplicates', 'every2', 'every3', 'every4'] as const;
 export type DropFrames = typeof DROP_FRAME_MODES[number];
+export const EXPORT_FORMATS = ['gif', 'video'] as const;
+export type ExportFormat = typeof EXPORT_FORMATS[number];
+export interface RegionRect { x: number; y: number; width: number; height: number; viewportWidth: number; viewportHeight: number }
+export type RecordingStage = 'idle' | 'selecting' | 'selected' | 'starting' | 'recording' | 'stopping';
+export interface RecordingState { stage: RecordingStage; tabId?: number; region?: RegionRect; startedAt?: number; title?: string }
 export interface ExportSettings { maxBytes: number; maxSide: number; fps: number; speed: number; dropFrames: DropFrames }
 export type SavedExportSettings = Omit<ExportSettings, 'speed' | 'dropFrames'> & Partial<Pick<ExportSettings, 'speed' | 'dropFrames'>>;
 export const DEFAULT_SETTINGS: ExportSettings = { maxBytes: POLICY.defaultBytes, maxSide: POLICY.maxSide, fps: POLICY.fps, speed: POLICY.speed, dropFrames: 'none' };
 export type Stage = 'queued' | 'loading' | 'downloading' | 'estimating' | 'capturing' | 'encoding' | 'optimizing' | 'dropping' | 'validating' | 'completed' | 'cancelled' | 'failed';
 export interface Job {
   id: string; source: MediaSource; segment: Segment; settings: ExportSettings;
+  format?: ExportFormat; autoDownload?: boolean;
   stage: Stage; progress: number; createdAt: number; updatedAt: number;
   attempt?: number; error?: ErrorCode; detail?: string;
   metrics?: { downloadMs: number; probeMs: number; captureMs: number; encodeMs: number; optimizeMs: number; totalMs: number; encodes: number; optimizations: number;
@@ -86,7 +92,7 @@ export function sampleTime(segment: Segment, index: number, fps: number, speed: 
   // v0.1.2: map the output clock to original media BEFORE scaling or encoding. No cumulative seeking error.
   return segment.start + index * speed / fps;
 }
-export function prepareSegment(segment: Segment, source: MediaSource, fps: number, speed: number): Segment {
+export function prepareSegment(segment: Segment, source: MediaSource, fps: number, speed: number, format: ExportFormat = 'gif'): Segment {
   if (!segment || !Number.isFinite(segment.start) || segment.start < 0 || !Number.isFinite(segment.end) || segment.end < 0) throw new TaskError('invalidSegment');
   // v0.1.8: keep end-of-file intent separate from the page's estimated end time.
   // Migrate old full-range jobs at the input boundary; an explicit time is never clamped.
@@ -96,18 +102,19 @@ export function prepareSegment(segment: Segment, source: MediaSource, fps: numbe
   // Only the downloaded video determines its bounds and full-range frame count.
   // Explicit trims already have a known workload, so reject malformed/oversized trims now.
   return source.kind === 'video' && endMode === 'source' ? selection
-    : validateSegment(selection, source.kind === 'video' ? null : source.duration, fps, speed);
+    : validateSegment(selection, source.kind === 'video' ? null : source.duration, fps, speed, format);
 }
 export function editSegment(segment: Segment, patch: Pick<Partial<Segment>, 'start' | 'end'>, duration: number | null): Segment {
   return { ...segment, ...patch, endMode: patch.end === undefined ? segment.endMode : patch.end === duration ? 'source' : 'time' };
 }
-export function validateSegment(segment: Segment, duration: number | null, fps: number, speed = POLICY.speed as number) {
+export function validateSegment(segment: Segment, duration: number | null, fps: number, speed = POLICY.speed as number, format: ExportFormat = 'gif') {
   if (!Number.isFinite(speed) || speed < POLICY.minSpeed || speed > POLICY.maxSpeed) throw new TaskError('invalidSettings');
+  if (!EXPORT_FORMATS.includes(format)) throw new TaskError('invalidSettings');
   // v0.1.8: duration here is decoded file metadata, not an MSE presentation clock.
   if (segment?.endMode === 'source' && duration !== null) segment = { ...segment, end: duration };
   if (!segment || !Number.isFinite(segment.start) || !Number.isFinite(segment.end) || segment.start < 0 || segment.end <= segment.start ||
     (duration !== null && segment.end > duration + 0.001)) throw new TaskError('invalidSegment');
-  if (sampleCount(segment, fps, speed) > POLICY.maxFrames) throw new TaskError('tooManyFrames');
+  if (format === 'gif' && sampleCount(segment, fps, speed) > POLICY.maxFrames) throw new TaskError('tooManyFrames');
   return segment;
 }
 export function validateWorkload(width: number, height: number, count: number) {

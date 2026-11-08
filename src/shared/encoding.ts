@@ -1,7 +1,29 @@
 import { parseGIF } from 'gifuct-js';
-import { POLICY, TaskError } from './model';
+import { fitDimensions, POLICY, TaskError } from './model';
 import type { FramePlan } from './frame-plan';
 export interface Candidate { width: number; height: number; fps: number; colors: number }
+function evenDimension(value: number) {
+  return Math.max(2, Math.floor(value / 2) * 2);
+}
+export function buildVideoCopyArgs(input: string, output: string) {
+  return ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-i', input, '-c', 'copy', '-movflags', '+faststart', '-y', output];
+}
+export function buildVideoClipArgs(input: string, output: string, segment: { start: number; end: number }, speed: number, maxSide: number, width: number, height: number, includeAudio = true) {
+  const fitted = fitDimensions(width, height, maxSide);
+  const w = evenDimension(fitted.width), h = evenDimension(fitted.height);
+  const filter = `setpts=PTS/${speed},scale=${w}:${h}:flags=lanczos`;
+  return ['-hide_banner', '-loglevel', 'error', '-threads', '1',
+    '-ss', String(segment.start), '-to', String(segment.end), '-i', input,
+    '-filter_threads', '1', '-vf', filter,
+    ...(includeAudio && speed === 1 ? ['-c:a', 'aac'] : ['-an']),
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '22', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-y', output];
+}
+export function buildFramesToVideoArgs(candidate: Pick<Candidate, 'width' | 'height' | 'fps'>, inputFps: number, inputPattern: string, output: string) {
+  const w = evenDimension(candidate.width), h = evenDimension(candidate.height);
+  return [...frameInput(inputFps, inputPattern), '-filter_threads', '1',
+    '-vf', `fps=${candidate.fps}:round=up:eof_action=pass,scale=${w}:${h}:flags=lanczos`,
+    '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '22', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-y', output];
+}
 function frameFilter(candidate: Candidate, plan?: FramePlan) {
   const filter = `fps=${candidate.fps}:round=up:eof_action=pass,scale=${candidate.width}:${candidate.height}:flags=lanczos`;
   // v0.1.6: selection only changes timestamps. Do not force an intermediate pixel format;

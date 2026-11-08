@@ -54,6 +54,8 @@ describe('export contract', () => {
     expect(() => validateSegment(selection, 60, 10, 1)).not.toThrow();
     expect(() => validateSegment(selection, 60.08, 10, 1)).toThrow('tooManyFrames');
     expect(() => prepareSegment({ ...selection, endMode: 'time' }, source, 10, 1)).toThrow('tooManyFrames');
+    expect(() => prepareSegment({ ...selection, endMode: 'time' }, source, 10, 1, 'video')).not.toThrow();
+    expect(validateSegment(selection, 60.08, 10, 1, 'video').end).toBe(60.08);
   });
   it.each([0.5, 1, 1.5, 2, 10])('maps the complete source range to a constant output rate at %dx', speed => {
     const segment = { id: 'speed', start: 2, end: 8 };

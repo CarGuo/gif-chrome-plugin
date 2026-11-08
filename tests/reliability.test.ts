@@ -27,6 +27,10 @@ describe('v0.1.11 history validation without invented defaults', () => {
   it('preserves cleared-file state and manual settings', () => {
     expect(migrateJob({ ...job, result: { ...job.result, clearedAt: 2000 } }).result?.clearedAt).toBe(2000);
     expect(migrateJob(job).settings).toEqual(job.settings);
+    const videoJob = migrateJob({ ...job, format: 'video' });
+    expect(videoJob.format).toBe('video');
+    expect(videoJob.result?.filename).toMatch(/\.mp4$/);
+    expect(() => migrateJob({ ...job, format: 'avi' })).toThrow('invalidHistory');
   });
 });
 
