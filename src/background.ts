@@ -69,22 +69,29 @@ async function scan(tabId: number, focus?: { frameId?: number; srcUrl?: string; 
 }
 async function resolveTargetTabId(preferredTabId?: number): Promise<number> {
   if (Number.isInteger(preferredTabId)) return preferredTabId!;
-  const session = await chrome.storage.session.get('activeTabId');
-  if (Number.isInteger(session.activeTabId)) return session.activeTabId;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!Number.isInteger(tab?.id)) throw new TaskError('pageUnavailable');
   return tab.id!;
 }
+// v0.1.14: serialize the recording lifecycle itself. A cancel received during startup
+// must release the resulting recorder, and a second start must not create a competing stream.
+let recordingOperations: Promise<void> = Promise.resolve();
+function recordingOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const request = recordingOperations.then(operation);
+  recordingOperations = request.then(() => {}, () => {});
+  return request;
+}
 async function cancelRecording() {
-  const { recordingState, recordingMode } = await chrome.storage.session.get(['recordingState', 'recordingMode']);
-  if (recordingMode === 'tab') await processor('cancel-tab-recording').catch(() => {});
+  const { recordingState } = await chrome.storage.session.get('recordingState');
+  if (['starting', 'recording', 'stopping'].includes(recordingState?.stage)) await processor('cancel-tab-recording').catch(() => {});
   if (Number.isInteger(recordingState?.tabId)) {
     await chrome.tabs.sendMessage(recordingState.tabId, { target: 'content', type: 'cancel-recording' }, { frameId: 0 }).catch(() => {});
   }
-  await chrome.storage.session.set({ recordingState: { stage: 'idle' } satisfies RecordingState, recordingMode: null });
+  await chrome.storage.session.set({ recordingState: { stage: 'idle' } satisfies RecordingState });
   return { stage: 'idle' } satisfies RecordingState;
 }
 async function startRegionSelect(preferredTabId?: number, initialRegion?: RegionRect): Promise<RecordingState> {
+  // v0.1.14: new selections follow the active page, not the last scanned media tab.
   const tabId = await resolveTargetTabId(preferredTabId);
   await cancelRecording();
   await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['content.js'] }).catch(() => { throw new TaskError('pageUnavailable'); });
@@ -100,67 +107,55 @@ async function startRegionSelect(preferredTabId?: number, initialRegion?: Region
     region: reply.data.region ?? undefined,
     title: reply.data.title,
   };
-  await chrome.storage.session.set({ activeTabId: tabId, recordingState: state, recordingMode: null });
+  await chrome.storage.session.set({ activeTabId: tabId, recordingState: state });
   return state;
 }
 async function startRecording(preferredTabId?: number, nextRegion?: RegionRect, pageTitle?: string): Promise<RecordingState> {
   const session = await chrome.storage.session.get(['recordingState']);
   const current: RecordingState = session.recordingState ?? { stage: 'idle' };
   if (current.stage === 'starting' || current.stage === 'stopping' || current.stage === 'recording') return current;
-  const tabId = preferredTabId ?? current.tabId ?? await resolveTargetTabId();
+  const tabId = current.tabId ?? preferredTabId ?? await resolveTargetTabId();
   const region = nextRegion ?? current.region;
   if (!region || region.width < 16 || region.height < 16) throw new TaskError('invalidSegment');
   const title = pageTitle ?? current.title;
   await chrome.storage.session.set({ recordingState: { stage: 'starting', tabId, region, title } satisfies RecordingState });
   try {
-    try {
-      const streamId = await new Promise<string>((resolve, reject) => {
-        chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
-          const err = chrome.runtime.lastError;
-          if (err || !id) reject(new Error(err?.message ?? 'tabCapture unavailable'));
-          else resolve(id);
-        });
+    // v0.1.14: a page region belongs to this tab's coordinate space. Keep capture in
+    // Chrome's tabCapture -> offscreen path; a screen/window picker cannot preserve it.
+    await ensureProcessor();
+    const streamId = await new Promise<string>((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, id => {
+        const err = chrome.runtime.lastError;
+        if (err || !id) reject(new TaskError('pageUnavailable'));
+        else resolve(id);
       });
-      const { startedAt } = await processor<{ startedAt: number }>('start-tab-recording', { streamId, region });
-      await chrome.tabs.sendMessage(tabId, { target: 'content', type: 'set-recording-ui', startedAt, region }, { frameId: 0 }).catch(() => {});
-      const state: RecordingState = { stage: 'recording', tabId, region, startedAt, title };
-      await chrome.storage.session.set({ recordingState: state, recordingMode: 'tab' });
-      return state;
-    } catch {
-      const reply: Reply<{ startedAt: number; region: RegionRect }> = await chrome.tabs.sendMessage(
-        tabId,
-        { target: 'content', type: 'start-page-capture', region },
-        { frameId: 0 }
-      ).catch(() => { throw new TaskError('pageUnavailable'); });
-      if (!reply?.ok) throw new TaskError(reply?.error ?? 'cancelled');
-      const state: RecordingState = { stage: 'recording', tabId, region: reply.data.region, startedAt: reply.data.startedAt, title };
-      await chrome.storage.session.set({ recordingState: state, recordingMode: 'page' });
-      return state;
-    }
+    });
+    const { startedAt } = await processor<{ startedAt: number }>('start-tab-recording', { streamId, region });
+    const reply: Reply = await chrome.tabs.sendMessage(tabId, { target: 'content', type: 'set-recording-ui', startedAt, region }, { frameId: 0 })
+      .catch(() => { throw new TaskError('pageUnavailable'); });
+    if (!reply?.ok) throw new TaskError(reply?.error ?? 'pageUnavailable');
+    const state: RecordingState = { stage: 'recording', tabId, region, startedAt, title };
+    await chrome.storage.session.set({ recordingState: state });
+    return state;
   } catch (error) {
-    await chrome.storage.session.set({ recordingState: { stage: 'selected', tabId, region, title } satisfies RecordingState, recordingMode: null });
+    await processor('cancel-tab-recording').catch(() => {});
+    await chrome.storage.session.set({ recordingState: { stage: 'selected', tabId, region, title } satisfies RecordingState });
     throw error;
   }
 }
+
 async function stopRecording(format: ExportFormat = 'gif', pageTitle?: string) {
   if (!EXPORT_FORMATS.includes(format)) throw new TaskError('invalidSettings');
-  const { recordingState, recordingMode } = await chrome.storage.session.get(['recordingState', 'recordingMode']);
+  const { recordingState } = await chrome.storage.session.get('recordingState');
   const current: RecordingState | undefined = recordingState;
   if (!current || current.stage !== 'recording' || !Number.isInteger(current.tabId)) throw new TaskError('sourceNotReady');
   await chrome.storage.session.set({ recordingState: { ...current, stage: 'stopping' } satisfies RecordingState });
   let blob: Blob | null = null;
   try {
-    if (recordingMode === 'tab') {
-      blob = await processor<Blob | null>('stop-tab-recording');
-      await chrome.tabs.sendMessage(current.tabId!, { target: 'content', type: 'cancel-recording' }, { frameId: 0 }).catch(() => {});
-    } else {
-      const reply: Reply<Blob | null> = await chrome.tabs.sendMessage(current.tabId!, { target: 'content', type: 'stop-page-capture' }, { frameId: 0 })
-        .catch(() => { throw new TaskError('pageUnavailable'); });
-      if (!reply?.ok) throw new TaskError(reply?.error ?? 'encodingFailed');
-      blob = reply.data;
-    }
+    blob = await processor<Blob | null>('stop-tab-recording');
   } finally {
-    await chrome.storage.session.set({ recordingState: { stage: 'idle' } satisfies RecordingState, recordingMode: null });
+    await chrome.tabs.sendMessage(current.tabId!, { target: 'content', type: 'cancel-recording' }, { frameId: 0 }).catch(() => {});
+    await chrome.storage.session.set({ recordingState: { stage: 'idle' } satisfies RecordingState });
   }
   if (!blob || !blob.size) throw new TaskError('invalidOutput');
   const rawTitle = (pageTitle || current.title || 'Page').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Page';
@@ -213,7 +208,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
   void chrome.sidePanel.open({ tabId: tab.id });
   if (info.menuItemId === 'gif-record') {
-    void startRegionSelect(tab.id).catch(() => chrome.storage.session.set({ scanError: 'pageUnavailable' }));
+    void recordingOperation(() => startRegionSelect(tab.id!)).catch(() => chrome.storage.session.set({ scanError: 'pageUnavailable' }));
     return;
   }
   void (async () => {
@@ -228,7 +223,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status !== 'loading') return;
   void chrome.storage.session.get(['activeTabId', 'recordingState']).then(s => {
-    if (s.recordingState?.tabId === tabId && s.recordingState.stage !== 'idle') void cancelRecording();
+    if (s.recordingState?.tabId === tabId && s.recordingState.stage !== 'idle') void recordingOperation(cancelRecording);
     if (s.activeTabId === tabId) return chrome.storage.session.set({ sources: [], scanError: 'sourceChanged' });
   });
 });
@@ -248,27 +243,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
       case 'load-preferences': return loadPreferences();
       case 'save-preferences': await savePreferences(message.settings); return null;
-      case 'start-region-select': return startRegionSelect(message.tabId, message.region);
-      case 'region-updated': {
+      case 'start-region-select': return recordingOperation(() => startRegionSelect(message.tabId, message.region));
+      case 'region-updated': return recordingOperation(async () => {
         const current = (await chrome.storage.session.get('recordingState')).recordingState as RecordingState | undefined;
-        const tabId = sender.tab?.id ?? current?.tabId;
-        const state: RecordingState = { stage: 'selected', tabId, region: message.region, title: message.title ?? current?.title };
+        // v0.1.14: queued pointer edits belong only to the selecting owner; a late
+        // edit must never replace a live recording and make its stream impossible to stop.
+        if (!current || current.tabId !== sender.tab?.id || !['selecting', 'selected'].includes(current.stage)) return current ?? { stage: 'idle' };
+        const state: RecordingState = { stage: 'selected', tabId: current.tabId, region: message.region, title: message.title ?? current.title };
         await chrome.storage.session.set({ recordingState: state });
         return state;
-      }
-      case 'recording-reselect': {
+      });
+      case 'recording-reselect': return recordingOperation(async () => {
         const current = (await chrome.storage.session.get('recordingState')).recordingState as RecordingState | undefined;
-        const state: RecordingState = { stage: 'selecting', tabId: sender.tab?.id ?? current?.tabId, title: current?.title };
+        if (!current || current.tabId !== sender.tab?.id || !['selecting', 'selected'].includes(current.stage)) return current ?? { stage: 'idle' };
+        const state: RecordingState = { stage: 'selecting', tabId: current.tabId, title: current.title };
         await chrome.storage.session.set({ recordingState: state });
         return state;
-      }
+      });
       case 'recording-cancelled':
       case 'cancel-recording':
-        return cancelRecording();
+        return recordingOperation(cancelRecording);
       case 'start-recording':
-        return startRecording(sender.tab?.id ?? message.tabId, message.region, message.title);
+        return recordingOperation(() => startRecording(sender.tab?.id ?? message.tabId, message.region, message.title));
       case 'stop-recording':
-        return stopRecording(message.format ?? 'gif', message.title);
+        return recordingOperation(() => stopRecording(message.format ?? 'gif', message.title));
       case 'scan': {
         let tabId = message.tabId;
         if (!Number.isInteger(tabId)) {

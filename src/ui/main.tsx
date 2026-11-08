@@ -196,7 +196,8 @@ function App() {
     if (dropped?.length) void perform(() => importLocalFiles(dropped), 'local-import');
   }
   async function startRegionRecord() {
-    const state = await rpc<RecordingState>({ target: 'background', type: 'start-region-select', tabId: sourceTab.current });
+    // v0.1.14: a new recording follows the active page, not the last scanned source tab.
+    const state = await rpc<RecordingState>({ target: 'background', type: 'start-region-select' });
     setRecordingState(state);
   }
   async function beginSelectedRegionRecord() {

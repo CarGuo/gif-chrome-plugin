@@ -8,13 +8,16 @@ function evenDimension(value: number) {
 export function buildVideoCopyArgs(input: string, output: string) {
   return ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-i', input, '-c', 'copy', '-movflags', '+faststart', '-y', output];
 }
-export function buildVideoClipArgs(input: string, output: string, segment: { start: number; end: number }, speed: number, maxSide: number, width: number, height: number, includeAudio = true) {
+export function buildVideoClipArgs(input: string, output: string, segment: { start: number; end: number }, speed: number, maxSide: number, width: number, height: number, includeAudio = true, fps: number = POLICY.fps) {
   const fitted = fitDimensions(width, height, maxSide);
   const w = evenDimension(fitted.width), h = evenDimension(fitted.height);
-  const filter = `setpts=PTS/${speed},scale=${w}:${h}:flags=lanczos`;
+  // v0.1.14: setpts alone lets input-rate sync duplicate/lose tail frames. Input
+  // seeking already makes PTS relative to the selected start; preserve that offset,
+  // start the output frame clock at zero, and stop at the selected output duration.
+  const filter = `setpts=PTS/${speed},fps=${fps}:start_time=0:round=up:eof_action=pass,scale=${w}:${h}:flags=lanczos`;
   return ['-hide_banner', '-loglevel', 'error', '-threads', '1',
     '-ss', String(segment.start), '-to', String(segment.end), '-i', input,
-    '-filter_threads', '1', '-vf', filter,
+    '-filter_threads', '1', '-vf', filter, '-t', String((segment.end - segment.start) / speed),
     ...(includeAudio && speed === 1 ? ['-c:a', 'aac'] : ['-an']),
     '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '22', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-y', output];
 }

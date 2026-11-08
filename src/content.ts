@@ -92,14 +92,6 @@ if (!window.__gifToolkitLoaded) {
       regionController.setRecordingUI(message.startedAt ?? Date.now(), message.region);
       return null;
     }
-    if (message.type === 'start-page-capture') {
-      if (!regionController) throw new TaskError('pageUnavailable');
-      return regionController.startPageCapture(message.region);
-    }
-    if (message.type === 'stop-page-capture') {
-      if (!regionController) throw new TaskError('pageUnavailable');
-      return regionController.stopPageCapture();
-    }
     if (message.type === 'cancel-recording') {
       regionController?.cancel();
       return null;

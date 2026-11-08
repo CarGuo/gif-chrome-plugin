@@ -80,8 +80,9 @@ describe('single-frame output timing', () => {
 describe('video export ffmpeg arguments', () => {
   it('forces even dimensions and faststart for video clip and frame encoding', () => {
     expect(buildVideoCopyArgs('in.mp4', 'out.mp4')).toContain('copy');
-    const clipArgs = buildVideoClipArgs('in.mp4', 'out.mp4', { start: 1, end: 5 }, 2, 800, 401, 225);
-    expect(clipArgs).toContain('setpts=PTS/2,scale=400:224:flags=lanczos');
+    const clipArgs = buildVideoClipArgs('in.mp4', 'out.mp4', { start: 1, end: 5 }, 2, 800, 401, 225, false, 15);
+    expect(clipArgs).toContain('setpts=PTS/2,fps=15:start_time=0:round=up:eof_action=pass,scale=400:224:flags=lanczos');
+    expect(clipArgs.slice(clipArgs.indexOf('-t'), clipArgs.indexOf('-t') + 2)).toEqual(['-t', '2']);
     expect(clipArgs).toContain('+faststart');
     const frameArgs = buildFramesToVideoArgs({ width: 333, height: 187, fps: 15 }, 15, 'frame_%05d.png', 'out.mp4');
     expect(frameArgs).toContain('fps=15:round=up:eof_action=pass,scale=332:186:flags=lanczos');

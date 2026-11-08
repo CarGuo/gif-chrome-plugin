@@ -197,19 +197,20 @@ async function processJob(job: Job) {
         check();
         await update(job, { stage: 'encoding', progress: 0.45 });
         let code = -1;
-        const isFullUnchanged = segment.start <= 0.01 &&
-          (segment.endMode === 'source' || (duration !== null && Math.abs(segment.end - duration) <= 0.05)) &&
+        // v0.1.14: source-end intent already resolves to decoded duration above.
+        // Only an exact full range may bypass encoding; tolerances swallowed small explicit trims.
+        const isFullUnchanged = segment.start === 0 && segment.end === duration &&
           job.settings.speed === 1 && Math.max(width, height) <= job.settings.maxSide;
         if (isFullUnchanged) {
           code = await ffmpeg.exec(buildVideoCopyArgs('input.media', 'output.mp4'), 90_000);
           await progressWrites; if (progressFailure) throw progressFailure.error; check();
         }
         if (code !== 0) {
-          code = await ffmpeg.exec(buildVideoClipArgs('input.media', 'output.mp4', segment, job.settings.speed, job.settings.maxSide, width, height, job.settings.speed === 1), 90_000);
+          code = await ffmpeg.exec(buildVideoClipArgs('input.media', 'output.mp4', segment, job.settings.speed, job.settings.maxSide, width, height, job.settings.speed === 1, job.settings.fps), 90_000);
           await progressWrites; if (progressFailure) throw progressFailure.error; check();
         }
         if (code !== 0 && job.settings.speed === 1) {
-          code = await ffmpeg.exec(buildVideoClipArgs('input.media', 'output.mp4', segment, job.settings.speed, job.settings.maxSide, width, height, false), 90_000);
+          code = await ffmpeg.exec(buildVideoClipArgs('input.media', 'output.mp4', segment, job.settings.speed, job.settings.maxSide, width, height, false, job.settings.fps), 90_000);
           await progressWrites; if (progressFailure) throw progressFailure.error; check();
         }
         await ffmpeg.deleteFile('input.media').catch(() => {});
@@ -421,9 +422,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         tabRecorder = undefined;
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: message.streamId } } as unknown as MediaTrackConstraints,
+          // v0.1.14: tabCapture otherwise defaults to an 800x600 letterboxed frame.
+          // Match the page viewport so region coordinates map to content, not black padding.
+          video: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: message.streamId,
+            minWidth: message.region.viewportWidth, maxWidth: message.region.viewportWidth,
+            minHeight: message.region.viewportHeight, maxHeight: message.region.viewportHeight,
+          } } as unknown as MediaTrackConstraints,
         });
         tabRecorder = await createStreamRegionRecorder(stream, message.region, () => {
+          // v0.1.14: the recorder releases capture resources before notifying its owner.
           tabRecorder = undefined;
           void chrome.runtime.sendMessage({ target: 'background', type: 'recording-cancelled' }).catch(() => {});
         });

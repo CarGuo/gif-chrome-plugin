@@ -6,11 +6,13 @@ A Chrome side panel extension for webpage videos, GIFs and WebP images, with bat
 
 [简体中文](README.md) · [Download v0.1.13](https://github.com/CarGuo/gif-chrome-plugin/releases/tag/v0.1.13) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/CarGuo/gif-chrome-plugin/issues)
 
-> **Published version: v0.1.13, Chrome 148+ required.** Install in developer mode. The extension is not listed in the Chrome Web Store. It supports both webpage capture and local video import; see the verification table for the remaining X and YouTube acceptance gaps.
+> **Published version: v0.1.13, Chrome 148+ required.** Install in developer mode. The extension is not listed in the Chrome Web Store. The current source / local review build is **0.1.14 (unpublished)**, adding region recording and MP4 export; release downloads remain at v0.1.13. See the verification table for the remaining X and YouTube acceptance gaps.
 
 ## Features
 
-- **Two kinds of sources**: right-click webpage videos, GIFs and WebP, or choose **Import videos from this device** to pick several local files at once. Local files are read directly — no network, no host permission, works offline.
+- **Two kinds of sources**: right-click webpage videos, GIFs and WebP, or choose **Import videos from this device** to pick several local files at once. The 0.1.14 local build also accepts dragged video files. Local files are read directly — no network, no host permission, works offline.
+- **Region recording (0.1.14 local build)**: select an area on the active webpage, move the recording toolbar and save the result as MP4 or GIF. Recording runs in an offscreen document and does not capture audio.
+- **Save video (0.1.14 local build)**: export selected clips as MP4 and preview the result. Whole videos that need no speed or size change attempt direct reuse; trimmed, sped-up or resized clips are re-encoded.
 - **A reusable local library**: imported videos stay available across sessions for repeated exports. After exporting, remove a single video with the **×** on its card, or use **Clear all imported videos** to remove them at once (videos currently being exported are kept). **Remove import** is also available in the clip section. Removing a video deletes its file; saved GIFs are untouched.
 - Right-click media to open the side panel, or scan a page from the toolbar.
 - Select multiple sources and clips; each clip becomes a separate GIF. The full duration is selected by default.
@@ -32,7 +34,7 @@ A Chrome side panel extension for webpage videos, GIFs and WebP images, with bat
 
 GitHub's automatic “Source code” download is for development and must be built first.
 
-To update, extract the new package into the existing installation folder, reload the extension, refresh the source page and reopen the panel. Check the displayed version. Removing the extension clears its local data, including imported local videos.
+To update, extract the new package into the existing installation folder, reload the extension, refresh the source page and reopen the panel. Check the displayed version: the current source build is **0.1.14, unpublished**. Removing the extension clears its local data, including imported local videos.
 
 ## Use
 
@@ -50,15 +52,17 @@ Downloadable videos are fetched first; imported local videos are read directly. 
 
 Turning optional frame removal off does **not** disable automatic size optimization. 4 MB means **4,000,000 bytes**, not 4 MiB.
 
-- Up to **600 sampled frames per clip** after speed adjustment: about 60 seconds of output at 10 fps.
+- GIF export supports up to **600 sampled frames per clip** after speed adjustment: about 60 seconds of output at 10 fps.
 - Maximum source media: 128 MiB (shared by downloads and local imports). Maximum sampled PNG storage: 160 MiB. Queue: 24 tasks. History: 30 finished tasks. Imported videos live in extension IndexedDB and keep taking disk space until you remove the import.
 - All video paths acquire local media bytes before conversion: imported files, downloads, file blobs, HLS, DASH and provider adapters. Page frame capture has been removed. Local imports never use the network; for webpage sources, keep the page open while establishing its download session. Ambiguous streams require an explicit choice.
-- DRM, live streams and sources whose complete media cannot be acquired are unsupported. Clip concatenation, cropping, exporting the original video, source-clip preview and a real thumbnail filmstrip are not included.
+- In the 0.1.14 local build, region recording captures webpage pixels without audio. Speed-adjusted MP4 export drops audio. GIF size and frame-removal settings do not impose an MP4 file-size limit, and direct whole-video reuse keeps the original frame rate. Converting non-video sources to MP4 still has a sampled-frame workload limit.
+- DRM, live streams and sources whose complete media cannot be acquired are unsupported. Clip concatenation, source-video cropping, source-clip preview and a real thumbnail filmstrip are not included.
 
 ## Verification status
 
 | Scenario | Status |
 | --- | --- |
+| 0.1.14 region recording, MP4 export and drag-and-drop fixes | Real Chromium output decoding, crop pixels, aspect ratio, speed-adjusted duration and cleanup pass; the user reloaded the updated extension in their existing Chrome installation and confirmed it works |
 | Local video batch import (kept across sessions, per-card remove, clear all) | Real Chromium end-to-end passes; **real-Chrome manual acceptance pending** |
 | Ordinary landscape/portrait videos; multiple sources and clips | Passed local real-browser end-to-end tests |
 | GIF, animated WebP and transparent WebP | Passed conversion and independent output decoding |

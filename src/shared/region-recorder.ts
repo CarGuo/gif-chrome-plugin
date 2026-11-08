@@ -1,4 +1,4 @@
-import { TaskError, type ExportFormat, type RegionRect } from './model';
+import { fitDimensions, POLICY, TaskError, type ExportFormat, type RecordingState, type RegionRect, type Reply } from './model';
 
 export interface ActiveStreamRecorder {
   stop: () => Promise<Blob>;
@@ -22,88 +22,104 @@ export async function createStreamRegionRecorder(stream: MediaStream, initialReg
   video.playsInline = true;
   video.srcObject = stream;
   const [videoTrack] = stream.getVideoTracks();
-  if (!videoTrack) {
-    stream.getTracks().forEach(track => track.stop());
-    throw new TaskError('sourceNotReady');
-  }
-  if (onTrackEnded) videoTrack.addEventListener('ended', onTrackEnded, { once: true });
-  await video.play().catch(() => {
-    stream.getTracks().forEach(track => track.stop());
-    throw new TaskError('sourceNotReady');
-  });
-  const region = clampRegion(initialRegion, initialRegion.viewportWidth, initialRegion.viewportHeight);
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(16, Math.min(800, Math.round(region.width / 2) * 2));
-  canvas.height = Math.max(16, Math.min(800, Math.round(region.height / 2) * 2));
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    stream.getTracks().forEach(track => track.stop());
-    throw new TaskError('encodingFailed');
-  }
-  const drawFrame = () => {
-    const vw = video.videoWidth || region.viewportWidth;
-    const vh = video.videoHeight || region.viewportHeight;
-    const scaleX = vw / Math.max(1, region.viewportWidth);
-    const scaleY = vh / Math.max(1, region.viewportHeight);
-    const sx = Math.max(0, Math.min(vw - 2, region.x * scaleX));
-    const sy = Math.max(0, Math.min(vh - 2, region.y * scaleY));
-    const sw = Math.max(2, Math.min(vw - sx, region.width * scaleX));
-    const sh = Math.max(2, Math.min(vh - sy, region.height * scaleY));
-    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-  };
-  drawFrame();
-  const timer = window.setInterval(drawFrame, 33);
-  const canvasStream = canvas.captureStream(30);
-  const mimeCandidates = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
-  const mimeType = mimeCandidates.find(candidate => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(candidate)) ?? '';
-  const recorder = new MediaRecorder(canvasStream, mimeType ? { mimeType, videoBitsPerSecond: 4_000_000 } : { videoBitsPerSecond: 4_000_000 });
-  const chunks: Blob[] = [];
-  recorder.ondataavailable = event => { if (event.data && event.data.size > 0) chunks.push(event.data); };
-  recorder.start(100);
-
+  let canvasStream: MediaStream | undefined;
+  let recorder: MediaRecorder | undefined;
+  let timer: number | undefined;
+  let finished = false;
+  let stopping = false;
   let cleaned = false;
+  const chunks: Blob[] = [];
+  let resolveResult!: (blob: Blob) => void;
+  let rejectResult!: (error: TaskError) => void;
+  const result = new Promise<Blob>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+  // v0.1.14: the recorder owns every resource from acquisition through finalization.
+  // A track ending or setup failing must release frames even when no caller can stop it.
+  void result.catch(() => {});
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
-    window.clearInterval(timer);
-    if (onTrackEnded) videoTrack.removeEventListener('ended', onTrackEnded);
-    canvasStream.getTracks().forEach(track => track.stop());
+    if (timer !== undefined) window.clearInterval(timer);
+    videoTrack?.removeEventListener('ended', onEnded);
+    canvasStream?.getTracks().forEach(track => track.stop());
     stream.getTracks().forEach(track => track.stop());
     video.srcObject = null;
   };
-
-  return {
-    stop: () => new Promise<Blob>((resolve, reject) => {
-      if (recorder.state === 'inactive') {
-        cleanup();
-        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'video/mp4' });
-        return blob.size ? resolve(blob) : reject(new TaskError('invalidOutput'));
-      }
-      recorder.onstop = () => {
-        cleanup();
-        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'video/mp4' });
-        if (!blob.size) reject(new TaskError('invalidOutput'));
-        else resolve(blob);
-      };
-      recorder.onerror = () => {
-        cleanup();
-        reject(new TaskError('encodingFailed'));
-      };
-      drawFrame();
-      recorder.stop();
-    }),
-    cancel: () => {
-      try { if (recorder.state !== 'inactive') recorder.stop(); } catch {}
-      cleanup();
-    },
+  const fail = (error: TaskError, notify = false) => {
+    if (finished) return;
+    finished = true;
+    try { if (recorder && recorder.state !== 'inactive') recorder.stop(); } catch {}
+    cleanup();
+    chunks.length = 0;
+    rejectResult(error);
+    if (notify) onTrackEnded?.();
   };
+  const onEnded = () => fail(new TaskError('cancelled'), true);
+  try {
+    if (!videoTrack || videoTrack.readyState === 'ended') throw new TaskError('sourceNotReady');
+    videoTrack.addEventListener('ended', onEnded, { once: true });
+    await video.play().catch(() => { throw new TaskError('sourceNotReady'); });
+    if (finished) throw new TaskError('cancelled');
+    const region = clampRegion(initialRegion, initialRegion.viewportWidth, initialRegion.viewportHeight);
+    const canvas = document.createElement('canvas');
+    // v0.1.14: cap the long axis once, then align AVC dimensions; independent caps stretch wide/tall regions.
+    const fitted = fitDimensions(region.width, region.height, POLICY.maxSide);
+    canvas.width = Math.max(2, Math.floor(fitted.width / 2) * 2);
+    canvas.height = Math.max(2, Math.floor(fitted.height / 2) * 2);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new TaskError('encodingFailed');
+    const drawFrame = () => {
+      const vw = video.videoWidth || region.viewportWidth;
+      const vh = video.videoHeight || region.viewportHeight;
+      const scaleX = vw / Math.max(1, region.viewportWidth);
+      const scaleY = vh / Math.max(1, region.viewportHeight);
+      const sx = Math.max(0, Math.min(vw - 2, region.x * scaleX));
+      const sy = Math.max(0, Math.min(vh - 2, region.y * scaleY));
+      const sw = Math.max(2, Math.min(vw - sx, region.width * scaleX));
+      const sh = Math.max(2, Math.min(vh - sy, region.height * scaleY));
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    };
+    drawFrame();
+    canvasStream = canvas.captureStream(30);
+    const mimeCandidates = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    const mimeType = mimeCandidates.find(candidate => MediaRecorder.isTypeSupported(candidate));
+    recorder = new MediaRecorder(canvasStream, { ...(mimeType ? { mimeType } : {}), videoBitsPerSecond: 4_000_000 });
+    const active = recorder;
+    active.ondataavailable = event => { if (!finished && event.data.size > 0) chunks.push(event.data); };
+    active.onstop = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      const blob = new Blob(chunks, { type: active.mimeType || mimeType || 'video/mp4' });
+      chunks.length = 0;
+      if (blob.size) resolveResult(blob);
+      else rejectResult(new TaskError('invalidOutput'));
+    };
+    active.onerror = () => fail(new TaskError('encodingFailed'), true);
+    active.start(100);
+    timer = window.setInterval(drawFrame, 33);
+    return {
+      stop() {
+        if (!finished && !stopping) {
+          stopping = true;
+          try {
+            drawFrame();
+            if (timer !== undefined) window.clearInterval(timer);
+            active.stop();
+          } catch { fail(new TaskError('encodingFailed')); }
+        }
+        return result;
+      },
+      cancel: () => fail(new TaskError('cancelled')),
+    };
+  } catch (error) {
+    fail(error instanceof TaskError ? error : new TaskError('encodingFailed'));
+    throw error;
+  }
 }
 
 export interface PageRegionController {
   startSelect: (initialRegion?: RegionRect) => RegionRect | null;
   setRecordingUI: (startedAt: number, region?: RegionRect) => void;
-  startPageCapture: (region?: RegionRect) => Promise<{ startedAt: number; region: RegionRect }>;
-  stopPageCapture: () => Promise<Blob | null>;
   cancel: () => void;
   getRegion: () => RegionRect | null;
 }
@@ -114,7 +130,6 @@ export function createPageRegionController(): PageRegionController {
   let region: RegionRect | null = null;
   let startedAt = 0;
   let clockTimer: number | undefined;
-  let recorder: ActiveStreamRecorder | null = null;
   let toolbarPos: { left: number; top: number } | null = null;
 
   const msg = (key: string, substitutions?: string | string[]) => chrome.i18n.getMessage(key, substitutions) || key;
@@ -134,8 +149,6 @@ export function createPageRegionController(): PageRegionController {
   }
 
   function cancelAll(notifyBackground = true) {
-    recorder?.cancel();
-    recorder = null;
     stage = 'idle';
     region = null;
     destroyUI();
@@ -408,11 +421,15 @@ export function createPageRegionController(): PageRegionController {
         const action = btn.dataset.action;
         if (action === 'cancel') cancelAll(true);
         else if (action === 'reselect') {
-          region = null;
-          stage = 'selecting';
-          toolbarPos = null;
-          render();
-          void chrome.runtime.sendMessage({ target: 'background', type: 'recording-reselect' }).catch(() => {});
+          // v0.1.14: the background owns transitions; a reselect queued behind
+          // startup may be declined, so keep the recording controls in sync with its reply.
+          void chrome.runtime.sendMessage({ target: 'background', type: 'recording-reselect' }).then((reply: Reply<RecordingState>) => {
+            if (!reply.ok || reply.data.stage !== 'selecting' || stage !== 'selected') return;
+            region = null;
+            stage = 'selecting';
+            toolbarPos = null;
+            render();
+          }).catch(() => {});
         } else if (action === 'start-record') {
           void chrome.runtime.sendMessage({
             target: 'background',
@@ -435,8 +452,6 @@ export function createPageRegionController(): PageRegionController {
 
   return {
     startSelect(initialRegion?: RegionRect) {
-      recorder?.cancel();
-      recorder = null;
       if (initialRegion) {
         region = clampRegion(initialRegion, window.innerWidth, window.innerHeight);
         stage = 'selected';
@@ -460,29 +475,6 @@ export function createPageRegionController(): PageRegionController {
         const timerEl = host?.shadowRoot?.getElementById('timer-text');
         if (timerEl) timerEl.textContent = formatElapsed(Date.now() - startedAt);
       }, 100);
-    },
-    async startPageCapture(nextRegion?: RegionRect) {
-      if (nextRegion) region = clampRegion(nextRegion, window.innerWidth, window.innerHeight);
-      if (!region) region = clampRegion({}, window.innerWidth, window.innerHeight);
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: 'browser' },
-        audio: false,
-        preferCurrentTab: true,
-        selfBrowserSurface: 'include',
-      } as DisplayMediaStreamOptions);
-      recorder = await createStreamRegionRecorder(stream, region, () => cancelAll(true));
-      const now = Date.now();
-      this.setRecordingUI(now, region);
-      return { startedAt: now, region };
-    },
-    async stopPageCapture() {
-      const active = recorder;
-      recorder = null;
-      stage = 'idle';
-      region = null;
-      destroyUI();
-      if (!active) return null;
-      return active.stop();
     },
     cancel() {
       cancelAll(false);
